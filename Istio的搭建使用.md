@@ -167,7 +167,7 @@ $ oc adm policy remove-scc-from-group anyuid system:serviceaccounts:<target-name
 
 openshift下使用`multus`管理CNI，它需要在应用的命名空间中部署[`NetworkAttachmentDefinition`](https://istio.io/docs/setup/platform-setup/openshift/#additional-requirements-for-the-application-namespace)来使用istio-cni插件，使用如下命令创建`NetworkAttachmentDefinition`，`target-namespace`替换为实际应用所在的命名空间。
 
-```yaml
+```shell
 $ cat <<EOF | oc -n <target-namespace> create -f -
 apiVersion: "k8s.cni.cncf.io/v1"
 kind: NetworkAttachmentDefinition
