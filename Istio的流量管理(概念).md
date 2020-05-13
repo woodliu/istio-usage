@@ -49,7 +49,7 @@ Virtual services允许：
 
 #### Virtual services举例
 
-下面是virtual service的一个例子，它根据路由规则将请求分发到不同版本的服务
+下面是virtual service的一个例子，它根据路由规则将请求分发到不同版本的服务。
 
 ```yaml
 apiVersion: networking.istio.io/v1alpha3
@@ -461,7 +461,7 @@ spec:
   - fault:
       delay:
         percentage:
-          value: 0.1
+          value: 0.1 #对1/1000的流量注入5s的延时
         fixedDelay: 5s
     route:
     - destination:

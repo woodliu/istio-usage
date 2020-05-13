@@ -1,6 +1,6 @@
-# Istio的流量管理(实操)
+# Istio的流量管理(实操)(istio 系列三)
 
-使用官方的[Bookinfo](https://istio.io/docs/examples/bookinfo/)应用进行测试。涵盖官方文档[Traffic Management](https://istio.io/docs/tasks/traffic-management/)章节。
+使用官方的[Bookinfo](https://istio.io/docs/examples/bookinfo/)应用进行测试。涵盖官方文档[Traffic Management](https://istio.io/docs/tasks/traffic-management/)章节中的请求路由，故障注入，流量迁移，TCP流量迁移，请求超时，熔断处理和流量镜像。不含ingress和Egree，后续再补充。
 
 [TOC]
 
@@ -90,7 +90,7 @@ Bookinfo应用部署在`default`命名空间下，使用自动注入sidecar的�
   $ curl -s 10.83.1.85:9080/productpage | grep -o "<title>.*</title>"
   ```
 
-  可在openshift中创建`router`进行访问(将${HOST_NAME}替换为实际的主机名)
+  可在openshift中创建`router`(其实也是一种ingress)进行访问(将${HOST_NAME}替换为实际的主机名)
 
   ```yaml
   kind: Route
@@ -229,13 +229,301 @@ $ samples/bookinfo/platform/kube/cleanup.sh
 
 ### [请求路由](https://istio.io/docs/tasks/traffic-management/request-routing/)
 
-下面展示如何根据微服务的多个版本动态地路由请求。
+下面展示如何根据官方提供的[Bookinfo](https://istio.io/docs/examples/bookinfo/)微服务的多个版本动态地路由请求。在上面部署BookInfo应用之后，该应用有3个`reviews`服务，分别提供：无排名，有黑星排名，有红星排名三种显示。由于默认情况下istio会使用轮询模式将请求一次分发到3个`reviews`服务上，因此在刷新`/productpage`的页面时，可以看到如下变化：
+
+- V1版本：
+
+  ![](./images/Request Routing1.png)
+
+- V2版本：
+
+  ![](./images/Request Routing2.png)
+
+- V3版本：
+
+  ![](./images/Request Routing3.png)
+
+本次展示如何将请求仅分发到某一个`reviews`服务上。
+
+首先创建如下virtual service：
+
+```shell
+$ kubectl apply -f samples/bookinfo/networking/virtual-service-all-v1.yaml
+```
+
+查看路由信息
+
+```shell
+$ kubectl get virtualservices -o yaml
+```
+
+```yaml
+- apiVersion: networking.istio.io/v1beta1
+  kind: VirtualService
+  metadata:
+    annotations:
+      ...
+    name: details
+    namespace: default
+  spec:
+    hosts:
+    - details
+    http:
+    - route:
+      - destination:
+          host: details
+          subset: v1
+		  
+- apiVersion: networking.istio.io/v1beta1
+  kind: VirtualService
+  metadata:
+    annotations:
+      ...
+    name: productpage
+    namespace: default
+  spec:
+    hosts:
+    - productpage
+    http:
+    - route:
+      - destination:
+          host: productpage
+          subset: v1
+		  
+- apiVersion: networking.istio.io/v1beta1
+  kind: VirtualService
+  metadata:
+    annotations:
+      ...
+    name: ratings
+    namespace: default
+  spec:
+    hosts:
+    - ratings
+    http:
+    - route:
+      - destination:
+          host: ratings
+          subset: v1
+		  
+- apiVersion: networking.istio.io/v1beta1
+  kind: VirtualService
+  metadata:
+    annotations:
+      ...
+    name: reviews
+    namespace: default
+  spec:
+    hosts:
+    - reviews
+    http:
+    - route:
+      - destination: #可以看到流量都分发到`reviews`服务的v1版本上
+          host: reviews
+          subset: v1 #将v1修改为v2就可以将请求分只发到v2版本上
+```
+
+此时再刷新`/productpage`的页面时，发现只显示无排名的页面
+
+卸载：
+
+```shell
+$ kubectl delete -f samples/bookinfo/networking/virtual-service-all-v1.yaml
+```
+
+#### 基于用户ID的路由
+
+下面展示基于HTTP首部字段的路由，首先在`/productpage`页面中使用名为`jason`的用户登陆(密码随便写)。
+
+部署启用基于用户的路由：
+
+```shell
+$ kubectl apply -f samples/bookinfo/networking/virtual-service-reviews-test-v2.yaml
+```
+
+创建的*VirtualService*如下
+
+```yaml
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  annotations:
+    ...
+  name: reviews
+  namespace: default
+spec:
+  hosts:
+  - reviews
+  http:
+  - match: #将HTTP请求首部中有end-user:jason字段的请求路由到v2
+    - headers:
+        end-user:
+          exact: jason
+    route:
+    - destination:
+        host: reviews
+        subset: v2
+  - route: #HTTP请求首部中不带end-user:jason字段的请求会被路由到v1
+    - destination:
+        host: reviews
+        subset: v1
+```
+
+刷新`/productpage`页面，可以看到只会显示v2版本(带黑星排名)页面，退出`jason`登陆，可以看到只显示v1版本(不带排名)页面。
+
+卸载：
+
+```shell
+$ kubectl delete -f samples/bookinfo/networking/virtual-service-reviews-test-v2.yaml
+```
+
+## [故障注入](https://istio.io/docs/tasks/traffic-management/fault-injection/)
+
+本节使用故障注入来测试应用的可靠性。
+
+首先使用如下配置固定请求路径：
+
+```shell
+$ kubectl apply -f samples/bookinfo/networking/virtual-service-all-v1.yaml
+$ kubectl apply -f samples/bookinfo/networking/virtual-service-reviews-test-v2.yaml
+```
+
+执行后，请求路径变为：
+
+- `productpage` → `reviews:v2` → `ratings` (仅适用于用户 `jason`)
+- `productpage` → `reviews:v1` (适用于除`jason`外的其他用户)
+
+### 注入HTTP延时故障
+
+为了测试Bookinfo应用的弹性，为用户`jason`在`reviews:v2` 和`ratings` 的微服务间注入7s的延时，用来模拟Bookinfo的内部bug。
+
+注意`reviews:v2`在调用`ratings`服务时，有一个10s的硬编码超时时间，因此即使引入了7s的延时，端到端流程上也不会看到任何错误。
+
+注入故障，来延缓来自测试用户jason的流量：
+
+```shell
+$ kubectl apply -f samples/bookinfo/networking/virtual-service-ratings-test-delay.yaml
+```
+
+查看部署的virtual service信息：
+
+```shell
+$ kubectl get virtualservice ratings -o yaml
+```
+
+```yaml
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  annotations:
+    ...
+  name: ratings
+  namespace: default
+spec:
+  hosts:
+  - ratings
+  http:
+  - fault: #将来自jason的全部流量注入5s的延迟，流量目的地为v1版本的ratings服务
+      delay:
+        fixedDelay: 7s
+        percentage:
+          value: 100
+    match:
+    - headers:
+        end-user:
+          exact: jason
+    route:
+    - destination:
+        host: ratings
+        subset: v1
+  - route: #非来自jason的流量不受影响
+    - destination:
+        host: ratings
+        subset: v1
+```
+
+打开 `/productpage` 页面，使用jason用户登陆并刷新浏览器页面，可以看到7s内不会加载页面，且页面上可以看到如下错误信息：
+
+![](./images/Fault Injection1.png)
+
+*相同服务的virtualservice的配置会被覆盖，因此此处没必要清理*
+
+### 注入HTTP中断故障
+
+在`ratings`微服务上模拟为测试用户`jason`引入HTTP中断故障，这种场景下，在加载页面时会看到错误信息`Ratings service is currently unavailable`.
+
+使用如下命令为用户`jason`注入HTTP中断
+
+```shell
+$ kubectl apply -f samples/bookinfo/networking/virtual-service-ratings-test-abort.yaml
+```
+
+获取部署的`ratings`的virtual service信息
+
+```yaml
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  annotations:
+    ...
+  name: ratings
+  namespace: default
+spec:
+  hosts:
+  - ratings
+  http:
+  - fault: #对来自用户jason的请求直接响应500错误码
+      abort:
+        httpStatus: 500
+        percentage:
+          value: 100
+    match:
+    - headers:
+        end-user:
+          exact: jason
+    route:
+    - destination:
+        host: ratings
+        subset: v1
+  - route:
+    - destination:
+        host: ratings
+        subset: v1
+```
+
+打开 `/productpage` 页面，使用`jason`用户登陆，可以看到如下错误。退出用户`jason`后该错误消失。
+
+![](./images/Fault Injection2.png)
+
+删除注入的中断故障
+
+```shell
+$ kubectl delete -f samples/bookinfo/networking/virtual-service-ratings-test-abort.yaml
+```
+
+### 卸载
+
+环境清理
+
+```shell
+$ kubectl delete -f samples/bookinfo/networking/virtual-service-all-v1.yaml
+```
+
+## [流量迁移](https://istio.io/docs/tasks/traffic-management/traffic-shifting/)
+
+本章展示如何将流量从一个版本的微服务上迁移到另一个版本的微服务，如将流量从老版本切换到新版本。通常情况下会逐步进行流量切换，istio下可以基于百分比进行流量切换。
+
+### 基于权重的路由
 
 
 
 
 
-### [故障注入](https://istio.io/docs/tasks/traffic-management/fault-injection/)
+
+
+
+
+
 
 
 
