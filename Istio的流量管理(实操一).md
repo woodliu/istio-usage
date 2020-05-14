@@ -1,4 +1,4 @@
-# Istio的流量管理(实操)(istio 系列三)
+# Istio的流量管理(实操一)(istio 系列三)
 
 使用官方的[Bookinfo](https://istio.io/docs/examples/bookinfo/)应用进行测试。涵盖官方文档[Traffic Management](https://istio.io/docs/tasks/traffic-management/)章节中的请求路由，故障注入，流量迁移，TCP流量迁移，请求超时，熔断处理和流量镜像。不含ingress和Egree，后续再补充。
 
@@ -848,8 +848,538 @@ HTTP请求的超时时间在路由规则的`timeout`字段中指定。默认情�
 $ kubectl delete -f samples/bookinfo/networking/virtual-service-all-v1.yaml
 ```
 
-## 熔断
+## 断路
 
-本节将显示如何为连接、请求和异常值检测配置熔断。熔断是创建弹性微服务应用程序的重要模式，允许编写的程序能够限制错误，延迟峰值以及不期望的网络的影响
+本节将显示如何为连接、请求和异常值检测配置熔断。断路是创建弹性微服务应用程序的重要模式，允许编写的程序能够限制错误，延迟峰值以及非期望的网络的影响。
 
 在`default`命名空间(已经开启自动注入sidecar)下部署`httpbin` 
+
+```shell
+$ kubectl apply -f samples/httpbin/httpbin.yaml
+```
+
+### 配置断路器
+
+- 创建[destination rule](https://istio.io/docs/reference/config/networking/destination-rule/)，在调用httpbin服务时应用断路策略。
+
+  ```yaml
+  $ kubectl apply -f - <<EOF
+  apiVersion: networking.istio.io/v1alpha3
+  kind: DestinationRule
+  metadata:
+    name: httpbin
+  spec:
+    host: httpbin
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: 1 #到一个目的主机的HTTP1/TCP 的最大连接数
+        http:
+          http1MaxPendingRequests: 1 #到一个目标的处于pending状态的最大HTTP请求数
+          maxRequestsPerConnection: 1 #到一个后端的每条连接上的最大请求数
+      outlierDetection: #控制从负载平衡池中逐出不正常主机的设置
+        consecutiveErrors: 1
+        interval: 1s
+        baseEjectionTime: 3m
+        maxEjectionPercent: 100
+  EOF
+  ```
+
+- 校验destination rule的正确性
+
+  ```yaml
+  $ kubectl get destinationrule httpbin -o yaml
+  apiVersion: networking.istio.io/v1beta1
+  kind: DestinationRule
+  metadata:
+    annotations:
+      ...
+    name: httpbin
+    namespace: default
+  spec:
+    host: httpbin
+    trafficPolicy:
+      connectionPool:
+        http:
+          http1MaxPendingRequests: 1
+          maxRequestsPerConnection: 1
+        tcp:
+          maxConnections: 1
+      outlierDetection:
+        baseEjectionTime: 3m
+        consecutiveErrors: 1
+        interval: 1s
+        maxEjectionPercent: 100
+  ```
+
+### 添加客户端
+
+创建一个客户端，向`httpbin`服务发送请求。客户端是一个名为 [fortio](https://github.com/istio/fortio)的简单负载测试工具，fortio可以控制连接数，并发数和发出去的HTTP调用延时。下面将使用该客户端触发设置在 `DestinationRule`中的断路器策略。
+
+- 部署`fortio`服务
+
+  ```shell
+  $ kubectl apply -f samples/httpbin/sample-client/fortio-deploy.yaml
+  ```
+
+- 登陆到客户端的pod，使用名为的fortio工具调用`httpbin`，使用`-curl`指明期望执行一次调用
+
+  ```shell
+  $ FORTIO_POD=$(kubectl get pod | grep fortio | awk '{ print $1 }')
+  $ kubectl exec -it $FORTIO_POD  -c fortio /usr/bin/fortio -- load -curl http://httpbin:8000/get
+  ```
+
+  调用结果如下，可以看到请求成功：
+
+  ```shell
+  $ kubectl exec -it $FORTIO_POD  -c fortio /usr/bin/fortio -- load -curl http://httpbin:8000/get
+  HTTP/1.1 200 OK
+  server: envoy
+  date: Thu, 14 May 2020 01:21:47 GMT
+  content-type: application/json
+  content-length: 586
+  access-control-allow-origin: *
+  access-control-allow-credentials: true
+  x-envoy-upstream-service-time: 11
+  
+  {
+    "args": {},
+    "headers": {
+      "Content-Length": "0",
+      "Host": "httpbin:8000",
+      "User-Agent": "fortio.org/fortio-1.3.1",
+      "X-B3-Parentspanid": "b5cd907bcfb5158f",
+      "X-B3-Sampled": "0",
+      "X-B3-Spanid": "407597df02737b32",
+      "X-B3-Traceid": "45f3690565e5ca9bb5cd907bcfb5158f",
+      "X-Forwarded-Client-Cert": "By=spiffe://cluster.local/ns/default/sa/httpbin;Hash=dac158cf40c0f28f3322e6219c45d546ef8cc3b7df9d993ace84ab6e44aab708;Subject=\"\";URI=spiffe://cluster.local/ns/default/sa/default"
+    },
+    "origin": "127.0.0.1",
+    "url": "http://httpbin:8000/get"
+  }
+  ```
+
+### 触发断路器
+
+在上面的`DestinationRule`设定中指定了`maxConnections: 1` 和 `http1MaxPendingRequests: 1`，表示如果并发的连接数和请求数大于1，则后续的请求和连接会失败，此时触发断路。
+
+1. 使用两条并发的连接 (`-c 2`) ，并发生20个请求 (`-n 20`):
+
+   ```shell
+   $ kubectl exec -it $FORTIO_POD  -c fortio /usr/bin/fortio -- load -c 2 -qps 0 -n 20 -loglevel Warning http://httpbin:8000/get
+   05:50:30 I logger.go:97> Log level is now 3 Warning (was 2 Info)
+   Fortio 1.3.1 running at 0 queries per second, 16->16 procs, for 20 calls: http://httpbin:8000/get
+   Starting at max qps with 2 thread(s) [gomax 16] for exactly 20 calls (10 per thread + 0)
+   05:50:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   05:50:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   05:50:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   05:50:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   Ended after 51.51929ms : 20 calls. qps=388.2
+   Aggregated Function Time : count 20 avg 0.0041658472 +/- 0.003982 min 0.000313105 max 0.017104987 sum 0.083316943
+   # range, mid point, percentile, count
+   >= 0.000313105 <= 0.001 , 0.000656552 , 15.00, 3
+   > 0.002 <= 0.003 , 0.0025 , 70.00, 11
+   > 0.003 <= 0.004 , 0.0035 , 80.00, 2
+   > 0.005 <= 0.006 , 0.0055 , 85.00, 1
+   > 0.008 <= 0.009 , 0.0085 , 90.00, 1
+   > 0.012 <= 0.014 , 0.013 , 95.00, 1
+   > 0.016 <= 0.017105 , 0.0165525 , 100.00, 1
+   # target 50% 0.00263636
+   # target 75% 0.0035
+   # target 90% 0.009
+   # target 99% 0.016884
+   # target 99.9% 0.0170829
+   Sockets used: 6 (for perfect keepalive, would be 2)
+   Code 200 : 16 (80.0 %)
+   Code 503 : 4 (20.0 %)
+   Response Header Sizes : count 20 avg 184.05 +/- 92.03 min 0 max 231 sum 3681
+   Response Body/Total Sizes : count 20 avg 701.05 +/- 230 min 241 max 817 sum 14021
+   All done 20 calls (plus 0 warmup) 4.166 ms avg, 388.2 qps
+   
+   ```
+
+   主要关注的内容如下，可以看到大部分请求都是成功的，但也有一小部分失败
+
+   ```shell
+   Sockets used: 6 (for perfect keepalive, would be 2)
+   Code 200 : 16 (80.0 %)
+   Code 503 : 4 (20.0 %)
+   ```
+
+2. 将并发连接数提升到3
+
+   ```shell
+   $ kubectl exec -it $FORTIO_POD  -c fortio /usr/bin/fortio -- load -c 3 -qps 0 -n 30 -loglevel Warning http://httpbin:8000/get
+   06:00:30 I logger.go:97> Log level is now 3 Warning (was 2 Info)
+   Fortio 1.3.1 running at 0 queries per second, 16->16 procs, for 30 calls: http://httpbin:8000/get
+   Starting at max qps with 3 thread(s) [gomax 16] for exactly 30 calls (10 per thread + 0)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   06:00:30 W http_client.go:679> Parsed non ok code 503 (HTTP/1.1 503)
+   Ended after 18.885972ms : 30 calls. qps=1588.5
+   Aggregated Function Time : count 30 avg 0.0015352119 +/- 0.002045 min 0.000165718 max 0.006403746 sum 0.046056356
+   # range, mid point, percentile, count
+   >= 0.000165718 <= 0.001 , 0.000582859 , 70.00, 21
+   > 0.002 <= 0.003 , 0.0025 , 73.33, 1
+   > 0.003 <= 0.004 , 0.0035 , 83.33, 3
+   > 0.004 <= 0.005 , 0.0045 , 90.00, 2
+   > 0.005 <= 0.006 , 0.0055 , 93.33, 1
+   > 0.006 <= 0.00640375 , 0.00620187 , 100.00, 2
+   # target 50% 0.000749715
+   # target 75% 0.00316667
+   # target 90% 0.005
+   # target 99% 0.00634318
+   # target 99.9% 0.00639769
+   Sockets used: 23 (for perfect keepalive, would be 3)
+   Code 200 : 9 (30.0 %)
+   Code 503 : 21 (70.0 %)
+   Response Header Sizes : count 30 avg 69 +/- 105.4 min 0 max 230 sum 2070
+   Response Body/Total Sizes : count 30 avg 413.5 +/- 263.5 min 241 max 816 sum 12405
+   All done 30 calls (plus 0 warmup) 1.535 ms avg, 1588.5 qps
+   ```
+
+   可以看到发生了短路，只有30%的请求成功
+
+   ```shell
+   Sockets used: 23 (for perfect keepalive, would be 3)
+   Code 200 : 9 (30.0 %)
+   Code 503 : 21 (70.0 %)
+   ```
+
+3. 查询 `istio-proxy` 获取更多信息
+
+   ```shell
+   $ kubectl exec $FORTIO_POD -c istio-proxy -- pilot-agent request GET stats | grep httpbin | grep pending
+   cluster.outbound|8000||httpbin.default.svc.cluster.local.circuit_breakers.default.rq_pending_open: 0
+   cluster.outbound|8000||httpbin.default.svc.cluster.local.circuit_breakers.high.rq_pending_open: 0
+   cluster.outbound|8000||httpbin.default.svc.cluster.local.upstream_rq_pending_active: 0
+   cluster.outbound|8000||httpbin.default.svc.cluster.local.upstream_rq_pending_failure_eject: 0
+   cluster.outbound|8000||httpbin.default.svc.cluster.local.upstream_rq_pending_overflow: 93
+   cluster.outbound|8000||httpbin.default.svc.cluster.local.upstream_rq_pending_total: 139
+   ```
+
+### 卸载
+
+```shell
+$ kubectl delete destinationrule httpbin
+$ kubectl delete deploy httpbin fortio-deploy
+$ kubectl delete svc httpbin fortio
+```
+
+## [镜像](https://istio.io/docs/tasks/traffic-management/mirroring/)
+
+本节展示istio的流量镜像功能。镜像会将活动的流量的副本发送到镜像的服务上。
+
+该任务中，首先将所有的流量分发到v1的测试服务上，然后通过镜像将一部分流量分发到v2。
+
+- 首先部署两个版本的httpbin服务
+
+  **httpbin-v1:**
+
+  ```yaml
+  $ cat <<EOF | istioctl kube-inject -f - | kubectl create -f -
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: httpbin-v1
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app: httpbin
+        version: v1 #v1版本标签
+    template:
+      metadata:
+        labels:
+          app: httpbin
+          version: v1
+      spec:
+        containers:
+        - image: docker.io/kennethreitz/httpbin
+          imagePullPolicy: IfNotPresent
+          name: httpbin
+          command: ["gunicorn", "--access-logfile", "-", "-b", "0.0.0.0:80", "httpbin:app"]
+          ports:
+          - containerPort: 80
+  EOF
+  ```
+
+  **httpbin-v2:**
+
+  ```yaml
+  $ cat <<EOF | istioctl kube-inject -f - | kubectl create -f -
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: httpbin-v2
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app: httpbin
+        version: v2  #v2版本标签
+    template:
+      metadata:
+        labels:
+          app: httpbin
+          version: v2
+      spec:
+        containers:
+        - image: docker.io/kennethreitz/httpbin
+          imagePullPolicy: IfNotPresent
+          name: httpbin
+          command: ["gunicorn", "--access-logfile", "-", "-b", "0.0.0.0:80", "httpbin:app"]
+          ports:
+          - containerPort: 80
+  EOF
+  ```
+
+  **httpbin Kubernetes service:**
+
+  ```yaml
+  $ kubectl create -f - <<EOF
+  apiVersion: v1
+  kind: Service
+  metadata:
+    name: httpbin
+    labels:
+      app: httpbin
+  spec:
+    ports:
+    - name: http
+      port: 8000
+      targetPort: 80
+    selector:
+      app: httpbin
+  EOF
+  ```
+
+- 启动一个`sleep`服务，提供`curl`功能
+
+  ```yaml
+  cat <<EOF | istioctl kube-inject -f - | kubectl create -f -
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: sleep
+  spec:
+    replicas: 1
+    selector:
+      matchLabels:
+        app: sleep
+    template:
+      metadata:
+        labels:
+          app: sleep
+      spec:
+        containers:
+        - name: sleep
+          image: tutum/curl
+          command: ["/bin/sleep","infinity"]
+          imagePullPolicy: IfNotPresent
+  EOF
+  ```
+
+### 创建默认路由策略
+
+默认kubernetes会对`httpbin`的所有版本的服务进行负载均衡，这一步中，将所有的流量分发到`v1`
+
+- 创建一个默认的路由，将所有流量分发大v1版本的服务
+
+  ```yaml
+  $ kubectl apply -f - <<EOF
+  apiVersion: networking.istio.io/v1alpha3
+  kind: VirtualService
+  metadata:
+    name: httpbin
+  spec:
+    hosts:
+      - httpbin
+    http:
+    - route:
+      - destination:
+          host: httpbin
+          subset: v1 # 100%将流量分发到v1
+        weight: 100
+  ---
+  apiVersion: networking.istio.io/v1alpha3
+  kind: DestinationRule
+  metadata:
+    name: httpbin
+  spec:
+    host: httpbin
+    subsets:
+    - name: v1
+      labels:
+        version: v1
+    - name: v2
+      labels:
+        version: v2
+  EOF
+  ```
+
+- 向该服务发送部分流量
+
+  ```shell
+  $ export SLEEP_POD=$(kubectl get pod -l app=sleep -o jsonpath={.items..metadata.name})
+  $ kubectl exec -it $SLEEP_POD -c sleep -- sh -c 'curl  http://httpbin:8000/headers' | python -m json.tool
+  {
+      "headers": {
+          "Accept": "*/*",
+          "Content-Length": "0",
+          "Host": "httpbin:8000",
+          "User-Agent": "curl/7.35.0",
+          "X-B3-Parentspanid": "a35a08a1875f5d18",
+          "X-B3-Sampled": "0",
+          "X-B3-Spanid": "7d1e0a1db0db5634",
+          "X-B3-Traceid": "3b5e9010f4a50351a35a08a1875f5d18",
+          "X-Forwarded-Client-Cert": "By=spiffe://cluster.local/ns/default/sa/default;Hash=6dd991f0846ac27dc7fb878ebe8f7b6a8ebd571bdea9efa81d711484505036d7;Subject=\"\";URI=spiffe://cluster.local/ns/default/sa/default"
+      }
+  }
+  ```
+
+- 校验`v1`和`v2`版本的httpbin pod的日志，可以看到`v1`服务是有访问日志的，而`v2`则没有
+
+  ```shell
+  $ export V1_POD=$(kubectl get pod -l app=httpbin,version=v1 -o jsonpath={.items..metadata.name})
+  $ kubectl logs -f $V1_POD -c httpbin
+  ...
+  127.0.0.1 - - [14/May/2020:06:17:57 +0000] "GET /headers HTTP/1.1" 200 518 "-" "curl/7.35.0"
+  127.0.0.1 - - [14/May/2020:06:18:16 +0000] "GET /headers HTTP/1.1" 200 518 "-" "curl/7.35.0"
+  ```
+
+  ```shell
+  $ export V2_POD=$(kubectl get pod -l app=httpbin,version=v2 -o jsonpath={.items..metadata.name})
+  $ kubectl logs -f $V2_POD -c httpbin
+  <none>
+  ```
+
+### 将流量镜像到v2
+
+- 修改路由规则，将流量镜像到v2
+
+  ```yaml
+  $ kubectl apply -f - <<EOF
+  apiVersion: networking.istio.io/v1alpha3
+  kind: VirtualService
+  metadata:
+    name: httpbin
+  spec:
+    hosts:
+      - httpbin
+    http:
+    - route:
+      - destination:
+          host: httpbin
+          subset: v1 #100%将流量分发到v1
+        weight: 100
+      mirror:
+        host: httpbin
+        subset: v2  #100%将流量镜像到v2
+      mirror_percent: 100
+  EOF
+  ```
+
+  当流量配置了镜像时，发送到镜像服务的请求会在Host/Authority首部之后加上`-shadow`，如`cluster-1` 变为`cluster-1-shadow`。**需要注意的是，镜像的请求是"发起并忘记"的方式，即会丢弃对镜像请求的响应**。
+
+  可以使用``mirror_percent` `字段镜像一部分流量，而不是所有的流量。如果没有出现该字段，为了兼容老版本，会镜像所有的流量。
+
+- 发送流量
+
+  ```shell
+  $ kubectl exec -it $SLEEP_POD -c sleep -- sh -c 'curl  http://httpbin:8000/headers' | python -m json.tool
+  ```
+
+  查看v1和v2服务的日志，可以看到此时将`v1`服务的请求镜像到了`v2`服务上
+
+  ```shell
+  $ kubectl logs -f $V1_POD -c httpbin
+  ...
+  127.0.0.1 - - [14/May/2020:06:17:57 +0000] "GET /headers HTTP/1.1" 200 518 "-" "curl/7.35.0"
+  127.0.0.1 - - [14/May/2020:06:18:16 +0000] "GET /headers HTTP/1.1" 200 518 "-" "curl/7.35.0"
+  127.0.0.1 - - [14/May/2020:06:32:09 +0000] "GET /headers HTTP/1.1" 200 518 "-" "curl/7.35.0"
+  127.0.0.1 - - [14/May/2020:06:32:37 +0000] "GET /headers HTTP/1.1" 200 518 "-" "curl/7.35.0"
+  
+  $ kubectl logs -f $V2_POD -c httpbin
+  ...
+  127.0.0.1 - - [14/May/2020:06:32:37 +0000] "GET /headers HTTP/1.1" 200 558 "-" "curl/7.35.0"
+  
+  ```
+
+### 卸载
+
+```shell
+$ kubectl delete virtualservice httpbin
+$ kubectl delete destinationrule httpbin
+$ kubectl delete deploy httpbin-v1 httpbin-v2 sleep
+$ kubectl delete svc httpbin
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
