@@ -85,7 +85,7 @@ hosts:
 
 virtual service的主机名可以是IP地址、DNS名称，也可以是短名称(例如Kubernetes服务短名称)，该名称会被隐式或显式解析为全限定域名（FQDN），具体取决于istio依赖的平台。可以使用前缀通配符（“*”）为所有匹配的服务创建一组路由规则。virtual service的`hosts`不一定作为Istio服务注册表的一部分，它们只是**虚拟目的地**，允许用户为网格无法路由到的虚拟主机建立流量模型。
 
-> virtual service的hosts短域名在解析为完整的域名时，补齐的namespace是VirtualService所在的命名空间，而非Service所在的命名空间。如上例的hosts会被解析为：reviews.default.svc.cluster.local
+> virtual service的hosts短域名在解析为完整的域名时，补齐的namespace是VirtualService所在的命名空间，而非Service所在的命名空间。如上例的hosts会被解析为：reviews.default.svc.cluster.local。
 
 #### 路由规则
 
