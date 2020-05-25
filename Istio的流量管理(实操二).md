@@ -829,10 +829,234 @@ istio支持几种不同的Secret格式，来支持与多种工具的集成，如
 
 ## [不终止TLS的ingress网关](https://istio.io/docs/tasks/traffic-management/ingress/ingress-sni-passthrough/)
 
-上一节中描述了如何配置HTTPS ingree来访问一个HTTP服务。本节中描述如何配置HTTPS ingrss来访问HTTPS服务等。通过配置ingress网关来执行SNI方式的访问，而不是在传入请求时终止TLS。
+上一节中描述了如何配置HTTPS ingree来访问一个HTTP服务。本节中描述如何配置HTTPS ingrss来访问HTTPS服务等。通过配置ingress网关来执行SNI方式的访问，而不会在请求进入ingress时终止TLS。
 
 本例中使用一个NGINX服务器作为HTTPS服务。
 
 ### 生成客户端和服务端的证书和密钥
 
-1. 
+1. 生成一个根证书和私钥，用于签名服务
+
+   ```shell
+   $ openssl req -x509 -sha256 -nodes -days 365 -newkey rsa:2048 -subj '/O=example Inc./CN=example.com' -keyout example.com.key -out example.com.crt
+   ```
+
+2. 为 `nginx.example.com`创建证书和私钥
+
+   ```shell
+   $ openssl req -out nginx.example.com.csr -newkey rsa:2048 -nodes -keyout nginx.example.com.key -subj "/CN=nginx.example.com/O=some organization"
+   $ openssl x509 -req -days 365 -CA example.com.crt -CAkey example.com.key -set_serial 0 -in nginx.example.com.csr -out nginx.example.com.crt
+   ```
+
+### 部署NGINX服务
+
+1. 创建kubernetes Secret保存服务的证书
+
+   ```shell
+   $ kubectl create secret tls nginx-server-certs --key nginx.example.com.key --cert nginx.example.com.crt
+   ```
+
+2. 为NGINX服务创建配置文件
+
+   ```shell
+   $ cat <<EOF > ./nginx.conf
+   events {
+   }
+   
+   http {
+     log_format main '$remote_addr - $remote_user [$time_local]  $status '
+     '"$request" $body_bytes_sent "$http_referer" '
+     '"$http_user_agent" "$http_x_forwarded_for"';
+     access_log /var/log/nginx/access.log main;
+     error_log  /var/log/nginx/error.log;
+   
+     server {
+       listen 443 ssl;
+   
+       root /usr/share/nginx/html;
+       index index.html;
+   
+       server_name nginx.example.com;
+       ssl_certificate /etc/nginx-server-certs/tls.crt;
+       ssl_certificate_key /etc/nginx-server-certs/tls.key;
+     }
+   }
+   EOF
+   ```
+
+3. 为NGINX服务创建kubernetes configmap
+
+   ```shell
+   $ kubectl create configmap nginx-configmap --from-file=nginx.conf=./nginx.conf
+   ```
+
+4. 部署NGINX服务
+
+   ```shell
+   $ cat <<EOF | istioctl kube-inject -f - | kubectl apply -f -
+   apiVersion: v1
+   kind: Service
+   metadata:
+     name: my-nginx
+     labels:
+       run: my-nginx
+   spec:
+     ports:
+     - port: 443
+       protocol: TCP
+     selector:
+       run: my-nginx
+   ---
+   apiVersion: apps/v1
+   kind: Deployment
+   metadata:
+     name: my-nginx
+   spec:
+     selector:
+       matchLabels:
+         run: my-nginx
+     replicas: 1
+     template:
+       metadata:
+         labels:
+           run: my-nginx
+       spec:
+         containers:
+         - name: my-nginx
+           image: nginx
+           ports:
+           - containerPort: 443
+           volumeMounts:
+           - name: nginx-config
+             mountPath: /etc/nginx
+             readOnly: true
+           - name: nginx-server-certs
+             mountPath: /etc/nginx-server-certs
+             readOnly: true
+         volumes:
+         - name: nginx-config
+           configMap:
+             name: nginx-configmap
+         - name: nginx-server-certs
+           secret:
+             secretName: nginx-server-certs #保存了NGINX服务的证书和私钥
+   EOF
+   ```
+
+5. 为了测试NGINX服务部署成功，向服务发送不使用证书的方式请求，并校验打印信息是否正确：
+
+   ```shell
+   $ kubectl exec -it $(kubectl get pod  -l run=my-nginx -o jsonpath={.items..metadata.name}) -c istio-proxy -- curl -v -k --resolve 
+   ...
+   * Server certificate:
+   *  subject: CN=nginx.example.com; O=some organization
+   *  start date: May 25 02:09:02 2020 GMT
+   *  expire date: May 25 02:09:02 2021 GMT
+   *  issuer: O=example Inc.; CN=example.com
+   *  SSL certificate verify result: unable to get local issuer certificate (20), continuing anyway.
+   ...
+   ```
+
+### 配置一个ingress gateway
+
+1. 定义一个gateway，端口为443.注意TLS的模式为`PASSTHROUGH`，表示gateway会放行ingress流量，不会终止TLS
+
+   ```shell
+   $ kubectl apply -f - <<EOF
+   apiVersion: networking.istio.io/v1alpha3
+   kind: Gateway
+   metadata:
+     name: mygateway
+   spec:
+     selector:
+       istio: ingressgateway # use istio default ingress gateway
+     servers:
+     - port:
+         number: 443
+         name: https
+         protocol: HTTPS
+       tls:
+         mode: PASSTHROUGH #不终止TLS
+       hosts:
+       - nginx.example.com
+   EOF
+   ```
+
+2. 配置经过Gateway的流量路由
+
+   ```shell
+   $ kubectl apply -f - <<EOF
+   apiVersion: networking.istio.io/v1alpha3
+   kind: VirtualService
+   metadata:
+     name: nginx
+   spec:
+     hosts:
+     - nginx.example.com
+     gateways:
+     - mygateway
+     tls:
+     - match:
+       - port: 443 #将gateway的流量导入kubernetes的my-nginx service
+         sniHosts:
+         - nginx.example.com
+       route:
+       - destination:
+           host: my-nginx
+           port:
+             number: 443
+   EOF
+   ```
+
+3. 根据[指导](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control/#determining-the-ingress-ip-and-ports)配置`SECURE_INGRESS_PORT`和`INGRESS_HOST`环境变量
+
+4. 通过ingress访问nginx，可以看到访问成功
+
+   ```shell
+   $ curl -v --resolve nginx.example.com:$SECURE_INGRESS_PORT:$INGRESS_HOST --cacert example.com.crt https://nginx.example.com:$SECURE_INGRESS_PORT
+   ...
+   * SSL connection using TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+   * Server certificate:
+   *       subject: O=some organization,CN=nginx.example.com
+   *       start date: May 25 02:09:02 2020 GMT
+   *       expire date: May 25 02:09:02 2021 GMT
+   *       common name: nginx.example.com
+   *       issuer: CN=example.com,O=example Inc.
+   ...
+   <title>Welcome to nginx!</title>
+   ...
+   ```
+
+### 卸载
+
+1. 移除kubernetes资源
+
+   ```shell
+   $ kubectl delete secret nginx-server-certs
+   $ kubectl delete configmap nginx-configmap
+   $ kubectl delete service my-nginx
+   $ kubectl delete deployment my-nginx
+   $ kubectl delete gateway mygateway
+   $ kubectl delete virtualservice nginx
+   ```
+
+2. 删除证书和密钥
+
+   ```shell
+   $ rm example.com.crt example.com.key nginx.example.com.crt nginx.example.com.key nginx.example.com.csr
+   ```
+
+3. 删除生成的配置文件
+
+   ```shell
+   $ rm ./nginx.conf
+   ```
+
+   
+
+
+
+
+
+
+
