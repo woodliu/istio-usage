@@ -125,7 +125,7 @@ istio会使用上述两种认证方式，以及凭证中声明的其他信息（
 
 ##### 认证策略
 
-本节展示了istio认证策略的工作细节。身份认证策略应用于服务接收的请求，为了在mutual TLS中给指定客户端侧的认证规则，需要在`DestinationRule`中指定`TLSSettings`，更多参见[TLS设置文档](https://istio.io/docs/reference/config/networking/destination-rule/#TLSSettings)。
+本节展示了istio认证策略的工作细节。身份认证策略应用于服务接收的请求，为了在mutual TLS中给指定客户端侧的认证规则，需要在`DestinationRule`中指定`TLSSettings`，更多参见[TLS设置文档](https://istio.io/docs/reference/config/networking/destination-rule/#ClientTLSSettings)。
 
 与其他istio配置类似，可以在`.yaml`文件中指定配置策略，使用`kubectl`部署。下面的认证策略指定了带`app:reviews`标签的负载的传输认证必须使用mutual TLS。
 

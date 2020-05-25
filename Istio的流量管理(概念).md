@@ -410,7 +410,7 @@ spec:
 
 #### 重试
 
-与timeout类似，可以在virtual service中设置单个服务的重试配置。下面例子中配置的最大重试次数为3，每次超时时间为2s。
+与timeout类似，可以在virtual service中设置单个服务的重试配置，默认情况下HTTP请求在返回错误前会重试2次。下面例子中配置的最大重试次数为3，每次超时时间为2s。
 
 ```yaml
 apiVersion: networking.istio.io/v1alpha3

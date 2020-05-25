@@ -33,6 +33,7 @@ istio-ingressgateway   LoadBalancer   10.84.93.45   <pending>     ...        11d
 ```shell
 $ export INGRESS_PORT=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.spec.ports[?(@.name=="http2")].nodePort}')
 $ export SECURE_INGRESS_PORT=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.spec.ports[?(@.name=="https")].nodePort}')
+$ export TCP_INGRESS_PORT=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.spec.ports[?(@.name=="tcp")].nodePort}')
 ```
 
 下面是istio-system命名空间的`istio-ingressgateway ` service中的一部分端口信息，可以看到`http2`和`https`的nodeport分别为`31194`和`31785`，对应上面的`INGRESS_PORT`和`SECURE_INGRESS_PORT`
@@ -124,7 +125,7 @@ $ export INGRESS_HOST=$(kubectl get po -l istio=ingressgateway -n istio-system -
 3. 使用curl命令访问`httpbin`服务，此时通过`-H`选项修改了HTTP请求首部的`Host`字段，使用http2的nodeport方式访问：
 
    ```shell
-   $ curl -I -HHost:httpbin.example.com http://$INGRESS_HOST:$INGRESS_PORT/status/200
+   $ curl -s -I -HHost:httpbin.example.com http://$INGRESS_HOST:$INGRESS_PORT/status/200
    HTTP/1.1 200 OK
    server: istio-envoy
    date: Thu, 21 May 2020 03:22:50 GMT
@@ -138,7 +139,7 @@ $ export INGRESS_HOST=$(kubectl get po -l istio=ingressgateway -n istio-system -
 4. 访问其他URL路径则返回404错误
 
    ```shell
-   $ curl -I -HHost:httpbin.example.com http://$INGRESS_HOST:$INGRESS_PORT/headers
+   $ curl -s -I -HHost:httpbin.example.com http://$INGRESS_HOST:$INGRESS_PORT/headers
    HTTP/1.1 404 Not Found
    date: Thu, 21 May 2020 03:25:20 GMT
    server: istio-envoy
@@ -218,9 +219,111 @@ $ kubectl delete virtualservice httpbin
 $ kubectl delete --ignore-not-found=true -f samples/httpbin/httpbin.yaml
 ```
 
-## [安全网关(文件挂载)](https://istio.io/docs/tasks/traffic-management/ingress/secure-ingress-mount/)
+## [Ingress(kubernetes)](https://istio.io/docs/tasks/traffic-management/ingress/kubernetes-ingress/)
 
-本节讲述如何使用simple或mutual TLS暴露安全的HTTPS服务。
+执行[ingress流量控制](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control/)中的[Before you begin](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control#before-you-begin) 的[Before you begin](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control#before-you-begin) 和[Determining the ingress IP and ports](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control/#determining-the-ingress-ip-and-ports)小节的操作，部署`httpbin`服务。本节介绍如何通过kubernetes的`Ingress`(非istio的gateway)进行访问。
+
+下面展示如何配置一个80端口的`Ingress`，用于HTTP流量：
+
+1. 创建一个istio `Gateway`，将来自`httpbin.example.com:80/status/*`的流量分发到service `httpbin`的`8000`端口
+
+   ```shell
+   $ kubectl apply -f - <<EOF
+   apiVersion: networking.k8s.io/v1beta1
+   kind: Ingress
+   metadata:
+     annotations:
+       kubernetes.io/ingress.class: istio
+     name: ingress
+   spec:
+     rules:
+     - host: httpbin.example.com
+       http:
+         paths:
+         - path: /status/*
+           backend:
+             serviceName: httpbin
+             servicePort: 8000
+   EOF
+   ```
+
+   注意需要使用 `kubernetes.io/ingress.class` annotation来告诉istio网关控制器处理该`ingress`，否则会忽略该ingress。
+
+2. 使用curl命令访问httpbin服务。Ingress的流量也需要经过istio `ingressgateway`。
+
+   ```shell
+   $ curl -I -HHost:httpbin.example.com http://$INGRESS_HOST:$INGRESS_PORT/status/200
+   HTTP/1.1 200 OK
+   server: istio-envoy
+   date: Fri, 22 May 2020 06:12:56 GMT
+   content-type: text/html; charset=utf-8
+   access-control-allow-origin: *
+   access-control-allow-credentials: true
+   content-length: 0
+   x-envoy-upstream-service-time: 20
+   ```
+
+   httpbin服务的发现是通过EDS实现的，使用如下命令查看：
+
+   ```shell
+   $ istioctl proxy-config cluster istio-ingressgateway-569669bb67-b6p5r|grep 8000
+   httpbin.default.svc.cluster.local                   8000    -    outbound      EDS
+   outbound_.8000_._.httpbin.default.svc.cluster.local   -     -       -          EDS
+   ```
+
+3. 访问其他未暴露的路径，返回HTTP 404错误：
+
+   ```shell
+   $ curl -I -HHost:httpbin.example.com http://$INGRESS_HOST:$INGRESS_PORT/headers
+   HTTP/1.1 404 Not Found
+   date: Fri, 22 May 2020 06:24:30 GMT
+   server: istio-envoy
+   transfer-encoding: chunked
+   ```
+
+### 下一步
+
+#### TLS
+
+Ingress支持[TLS设置](https://kubernetes.io/docs/concepts/services-networking/ingress/#tls)。Istio也支持TLS设置，但相关的`secret`必须存在`istio-ingressgateway` deployment所在的命名空间中。可以使用[cert-manager](https://istio.io/docs/ops/integrations/certmanager/)生成这些证书。
+
+#### 指定路径类型
+
+默认情况下，Istio会将路径视为完全匹配，如果路径使用`/*`或`*`结尾，则该路径为前缀匹配。不支持其他正则匹配。
+
+kubernetes 1.18中新增了一个字段`pathType`，允许声明为`Exact`或`Prefix`。
+
+#### 指定`IngressClass`
+
+kubernetes 1.18中新增了一个资源`IngressClass`，替换了`Ingress`资源的 `kubernetes.io/ingress.class` annotation。如果使用该资源，则需要将`controller`设置为`istio.io/ingress-controller`：
+
+```yaml
+apiVersion: networking.k8s.io/v1beta1
+kind: IngressClass
+metadata:
+  name: istio
+spec:
+  controller: istio.io/ingress-controller
+---
+apiVersion: networking.k8s.io/v1beta1
+kind: Ingress
+metadata:
+  name: ingress
+spec:
+  ingressClassName: istio
+  ...
+```
+
+### 卸载
+
+```shell
+$ kubectl delete ingress ingress
+$ kubectl delete --ignore-not-found=true -f samples/httpbin/httpbin.yaml
+```
+
+## [安全网关](https://istio.io/docs/tasks/traffic-management/ingress/secure-ingress-mount/)
+
+本节讲述如何使用simple或mutual TLS暴露安全的HTTPS服务。证书是通过SDS进行密钥发现的。
 
 TLS需要的私钥，服务端证书，根证书是使用基于文件装载的方法配置的。
 
@@ -243,37 +346,24 @@ TLS需要的私钥，服务端证书，根证书是使用基于文件装载的�
    $ openssl x509 -req -days 365 -CA example.com.crt -CAkey example.com.key -set_serial 0 -in httpbin.example.com.csr -out httpbin.example.com.crt
    ```
 
-### 使用挂载文件的方式配置TLS ingress网关
+### 单主机配置TLS ingress网关
 
-本节中在ingress网关上使用443端口处理HTTP流量。首先创建一个带证书和私钥的secret，该secret挂载到文件`/etc/istio/ingressgateway-certs`中，然后创建一个使用443端口的网关服务。
+1. 为ingree网关创建一个secret
 
-1. 创建一个kubernetes secret来保存服务的证书和私钥。使用`kubectl`在命名空间 `istio-system` 中创建`secret`  `istio-ingressgateway-certs` 。istio网关会自动加载该secret。
-
-   > secret在命名空间 `istio-system` 中的名字必须是 `istio-ingressgateway-certs`，与该任务中使用的Istio默认入口网关的配置保持一致。
+   > secret的名字不能以`istio`或`prometheus`开头，且secret不应该包含`token`字段
 
    ```shell
-   $ kubectl create -n istio-system secret tls istio-ingressgateway-certs --key httpbin.example.com.key --cert httpbin.example.com.crt
-   secret/istio-ingressgateway-certs created
+   $ kubectl create -n istio-system secret tls httpbin-credential --key=httpbin.example.com.key --cert=httpbin.example.com.crt
    ```
 
-   注意，默认`istio-system`命名空间中的所有pod都可以挂载该secret并访问私钥。可以在不同的命名空间中部署ingress网关并创建secret，这种情况下，只有该ingress网关的pod才能挂载该secert。
-
-   校验ingress网关已经挂载了`tls.crt`和`tls.key`，如果没有立即看到，可能需要等一会：
-
-   ```shell
-   $ kubectl exec -it -n istio-system $(kubectl -n istio-system get pods -l istio=ingressgateway -o jsonpath='{.items[0].metadata.name}') -- ls -al /etc/istio/ingressgateway-certs
-   ```
-
-2. 在`server`部分定义一个443端口的`Gateway`
-
-   > 证书的私钥的位置必须是 `/etc/istio/ingressgateway-certs`,否则gateway将无法加载。证书最终会挂载到`istio-ingressgateway-xxx` pod的`/etc/istio/ingressgateway-certs`目录中
+2. 在`server`部分定义一个443端口的`Gateway`，将`credentialName`指定为`httpbin-credential`，与`secret`的名字相同，TLS的mode为`SIMPLE`。
 
    ```yaml
-   $ kubectl apply -f - <<EOF
+   $ cat <<EOF | kubectl apply -f -
    apiVersion: networking.istio.io/v1alpha3
    kind: Gateway
    metadata:
-     name: httpbin-gateway
+     name: mygateway
    spec:
      selector:
        istio: ingressgateway # use istio default ingress gateway
@@ -282,12 +372,11 @@ TLS需要的私钥，服务端证书，根证书是使用基于文件装载的�
          number: 443
          name: https
          protocol: HTTPS
-       tls:  # 只是新增了tls部分
+       tls:
          mode: SIMPLE
-         serverCertificate: /etc/istio/ingressgateway-certs/tls.crt 
-         privateKey: /etc/istio/ingressgateway-certs/tls.key
+         credentialName: httpbin-credential # must be the same as secret
        hosts:
-       - "httpbin.example.com"
+       - httpbin.example.com
    EOF
    ```
 
@@ -325,20 +414,22 @@ TLS需要的私钥，服务端证书，根证书是使用基于文件装载的�
    通过将请求发送到`/status/418` URL路径时，可以看到`httpbin`确实被访问了，httpbin服务会返回[418 I’m a Teapot](https://tools.ietf.org/html/rfc7168#section-2.3.3)代码。.
 
    ```shell
-   $ curl -v -HHost:httpbin.example.com --resolve httpbin.example.com:$SECURE_INGRESS_PORT:$INGRESS_HOST --cacert example.com.crt https://httpbin.example.com:$SECURE_INGRESS_PORT/status/418
+   $ curl -v -HHost:httpbin.example.com --resolve "httpbin.example.com:$SECURE_INGRESS_PORT:$INGRESS_HOST" \
+   --cacert example.com.crt "https://httpbin.example.com:$SECURE_INGRESS_PORT/status/418"
    
-   * Added httpbin.example.com:31785:172.20.127.212 to DNS cache
-   * About to connect() to httpbin.example.com port 31785 (#0)
-   *   Trying 172.20.127.212...
-   * Connected to httpbin.example.com (172.20.127.212) port 31785 (#0)
+   > --cacert example.com.crt "https://httpbin.example.com:$SECURE_INGRESS_PORT/status/418"
+   * Added httpbin.example.com:31967:172.20.127.211 to DNS cache
+   * About to connect() to httpbin.example.com port 31967 (#0)
+   *   Trying 172.20.127.211...
+   * Connected to httpbin.example.com (172.20.127.211) port 31967 (#0)
    * Initializing NSS with certpath: sql:/etc/pki/nssdb
    *   CAfile: example.com.crt
      CApath: none
    * SSL connection using TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
    * Server certificate:
    *       subject: O=httpbin organization,CN=httpbin.example.com
-   *       start date: May 21 06:31:34 2020 GMT
-   *       expire date: May 21 06:31:34 2021 GMT
+   *       start date: May 22 09:03:01 2020 GMT
+   *       expire date: May 22 09:03:01 2021 GMT
    *       common name: httpbin.example.com
    *       issuer: CN=example.com,O=example Inc.
    > GET /status/418 HTTP/1.1
@@ -348,12 +439,12 @@ TLS需要的私钥，服务端证书，根证书是使用基于文件装载的�
    >
    < HTTP/1.1 418 Unknown
    < server: istio-envoy
-   < date: Thu, 21 May 2020 06:34:49 GMT
+   < date: Fri, 22 May 2020 09:08:29 GMT
    < x-more-info: http://tools.ietf.org/html/rfc2324
    < access-control-allow-origin: *
    < access-control-allow-credentials: true
    < content-length: 135
-   < x-envoy-upstream-service-time: 7
+   < x-envoy-upstream-service-time: 2
    <
    
        -=[ teapot ]=-
@@ -368,72 +459,209 @@ TLS需要的私钥，服务端证书，根证书是使用基于文件装载的�
    * Connection #0 to host httpbin.example.com left intact
    ```
 
-   查看curl输出中的*Server certificate*中的信息，上述返回值的最后有一个茶壶的图片，说明运行成功。(*上述的返回结果与官方给的有所出入*)
+   查看curl输出中的*Server certificate*中的信息，上述返回值的最后有一个茶壶的图片，说明运行成功。
 
-### 配置一个mutual TLS ingress网关
-
-本节会在外部的客户端和网关之间配置[mutual TLS](https://en.wikipedia.org/wiki/Mutual_authentication).
-
-1. 创建一个保存CA的kubernetes `secret`，服务端可以使用该`secret`验证客户端。使用`kubectl`在`istio-system`命名空间中创建一个名为`istio-ingressgateway-ca-certs`的secret。istio会自动加载该secret：
-
-   > `istio-system`命名空间中的secret的名字必须为`istio-ingressgateway-ca-certs`，与该任务中使用的Istio默认入口网关的配置一致。
+5. 删除老的网关secret，创建一个新的secret，并使用该secret修改ingress网关的凭据
 
    ```shell
-   $ kubectl create -n istio-system secret generic istio-ingressgateway-ca-certs --from-file=example.com.crt
+   $ kubectl -n istio-system delete secret httpbin-credential
    ```
 
-2. 将前面的Gateway的TLS模式变更为`MUTUAL`并指定`caCertificates`
+   ```shell
+   $ mkdir new_certificates
+   $ openssl req -x509 -sha256 -nodes -days 365 -newkey rsa:2048 -subj '/O=example Inc./CN=example.com' -keyout new_certificates/example.com.key -out new_certificates/example.com.crt
+   $ openssl req -out new_certificates/httpbin.example.com.csr -newkey rsa:2048 -nodes -keyout new_certificates/httpbin.example.com.key -subj "/CN=httpbin.example.com/O=httpbin organization"
+   $ openssl x509 -req -days 365 -CA new_certificates/example.com.crt -CAkey new_certificates/example.com.key -set_serial 0 -in new_certificates/httpbin.example.com.csr -out new_certificates/httpbin.example.com.crt
+   $ kubectl create -n istio-system secret tls httpbin-credential \
+   --key=new_certificates/httpbin.example.com.key \
+   --cert=new_certificates/httpbin.example.com.crt
+   ```
 
-   > 证书的位置必须是 `/etc/istio/ingressgateway-ca-certs`，否则gateway将无法加载。证书的名字必须与创建secret的证书相同，本例中为 `example.com.crt`。
+6. 使用新的证书链访问`httpbin`服务
+
+   ```shell
+   $ curl -v -HHost:httpbin.example.com --resolve "httpbin.example.com:$SECURE_INGRESS_PORT:$INGRESS_HOST" \
+   --cacert new_certificates/example.com.crt "https://httpbin.example.com:$SECURE_INGRESS_PORT/status/418"
+   ```
+
+7. 如果使用老的证书访问，则返回错误
+
+   ```shell
+   $ curl -v -HHost:httpbin.example.com --resolve "httpbin.example.com:$SECURE_INGRESS_PORT:$INGRESS_HOST" \
+   > --cacert example.com.crt "https://httpbin.example.com:$SECURE_INGRESS_PORT/status/418"
+   * Added httpbin.example.com:31967:172.20.127.211 to DNS cache
+   * About to connect() to httpbin.example.com port 31967 (#0)
+   *   Trying 172.20.127.211...
+   * Connected to httpbin.example.com (172.20.127.211) port 31967 (#0)
+   * Initializing NSS with certpath: sql:/etc/pki/nssdb
+   *   CAfile: example.com.crt
+     CApath: none
+   * Server certificate:
+   *       subject: O=httpbin organization,CN=httpbin.example.com
+   *       start date: May 22 09:24:07 2020 GMT
+   *       expire date: May 22 09:24:07 2021 GMT
+   *       common name: httpbin.example.com
+   *       issuer: CN=example.com,O=example Inc.
+   * NSS error -8182 (SEC_ERROR_BAD_SIGNATURE)
+   * Peer's certificate has an invalid signature.
+   * Closing connection 0
+   curl: (60) Peer's certificate has an invalid signature.
+   ```
+
+### 多主机配置TLS ingress网关
+
+本节会为多个主机(`httpbin.example.com`和`helloworld-v1.example.com`)配置一个ingress网关。ingress网关会在`credentialName`中查找唯一的凭据。
+
+1. 删除之前创建的secret并为`httpbin`重建凭据
+
+   ```shell
+   $ kubectl -n istio-system delete secret httpbin-credential
+   $ kubectl create -n istio-system secret tls httpbin-credential \
+   --key=httpbin.example.com.key \
+   --cert=httpbin.example.com.crt
+   ```
+
+2. 启动`helloworld-v1`
 
    ```yaml
-   $ kubectl apply -f - <<EOF
+   $ cat <<EOF | kubectl apply -f -
+   apiVersion: v1
+   kind: Service
+   metadata:
+     name: helloworld-v1
+     labels:
+       app: helloworld-v1
+   spec:
+     ports:
+     - name: http
+       port: 5000
+     selector:
+       app: helloworld-v1
+   ---
+   apiVersion: apps/v1
+   kind: Deployment
+   metadata:
+     name: helloworld-v1
+   spec:
+     replicas: 1
+     selector:
+       matchLabels:
+         app: helloworld-v1
+         version: v1
+     template:
+       metadata:
+         labels:
+           app: helloworld-v1
+           version: v1
+       spec:
+         containers:
+         - name: helloworld
+           image: istio/examples-helloworld-v1
+           resources:
+             requests:
+               cpu: "100m"
+           imagePullPolicy: IfNotPresent #Always
+           ports:
+           - containerPort: 5000
+   EOF
+   ```
+
+3. 为`helloworld-v1.example.com`创建证书和私钥
+
+   ```shell
+   $ openssl req -out helloworld-v1.example.com.csr -newkey rsa:2048 -nodes -keyout helloworld-v1.example.com.key -subj "/CN=helloworld-v1.example.com/O=helloworld organization"
+   $ openssl x509 -req -days 365 -CA example.com.crt -CAkey example.com.key -set_serial 1 -in helloworld-v1.example.com.csr -out helloworld-v1.example.com.crt
+   ```
+
+4. 为`helloworld-credential`创建secret
+
+   ```shell
+   $ kubectl create -n istio-system secret tls helloworld-credential --key=helloworld-v1.example.com.key --cert=helloworld-v1.example.com.crt
+   ```
+
+5. 定义两个网关，网关端口为443。在`credentialName`字段分别设置`httpbin-credential`和`helloworld-credential`，TLS模式为`SIMPLE`。
+
+   ```yaml
+   $ cat <<EOF | kubectl apply -f -
    apiVersion: networking.istio.io/v1alpha3
    kind: Gateway
    metadata:
-     name: httpbin-gateway
+     name: mygateway
    spec:
      selector:
        istio: ingressgateway # use istio default ingress gateway
      servers:
      - port:
          number: 443
-         name: https
+         name: https-httpbin #httpbin的gateway配置
          protocol: HTTPS
        tls:
-         mode: MUTUAL
-         serverCertificate: /etc/istio/ingressgateway-certs/tls.crt
-         privateKey: /etc/istio/ingressgateway-certs/tls.key
-         caCertificates: /etc/istio/ingressgateway-ca-certs/example.com.crt
+         mode: SIMPLE
+         credentialName: httpbin-credential
        hosts:
-       - "httpbin.example.com"
+       - httpbin.example.com
+     - port:
+         number: 443
+         name: https-helloworld #https-helloword的gateway配置
+         protocol: HTTPS
+       tls:
+         mode: SIMPLE
+         credentialName: helloworld-credential
+       hosts:
+       - helloworld-v1.example.com
    EOF
    ```
 
-3. 访问httpbin服务，返回如下错误
+6. 配置gateway的流量路由，为新应用添加对应的virtual service
 
-   ```shell
-   $ curl -HHost:httpbin.example.com --resolve httpbin.example.com:$SECURE_INGRESS_PORT:$INGRESS_HOST --cacert example.com.crt https://httpbin.example.com:$SECURE_INGRESS_PORT/status/418
-   
-   curl: (35) NSS: client certificate not found (nickname not specified)
+   ```yaml
+   $ cat <<EOF | kubectl apply -f -
+   apiVersion: networking.istio.io/v1alpha3
+   kind: VirtualService
+   metadata:
+     name: helloworld-v1
+   spec:
+     hosts:
+     - helloworld-v1.example.com
+     gateways:
+     - mygateway
+     http:
+     - match:
+       - uri:
+           exact: /hello
+       route:
+       - destination:
+           host: helloworld-v1
+           port:
+             number: 5000
+   EOF
    ```
 
-   由于没有提供client的证书，tls协商会失败
-
-4. 为`httpbin.example.com`服务创建一个客户端证书，将`httpbin-client.example.com` URI分配给客户端.
-
-   *注意：isito[官方文档](https://istio.io/docs/tasks/traffic-management/ingress/secure-ingress-mount/#configure-a-mutual-tls-ingress-gateway)中下面命令中会将`httpbin-client.example.com.crt`的serial number设置为0，这会与上面创建的`/etc/istio/ingressgateway-certs/tls.crt`的serial number相同，导致出现`SEC_ERROR_REUSED_ISSUER_AND_SERIAL`错误，因此下面将`set_serial`的值设置为1*
+7. 向`helloworld-v1.example.com`发送HTTPS请求
 
    ```shell
-   $ openssl req -out httpbin-client.example.com.csr -newkey rsa:2048 -nodes -keyout httpbin-client.example.com.key -subj "/CN=httpbin-client.example.com/O=httpbin's client organization"
-   $ openssl x509 -req -days 365 -CA example.com.crt -CAkey example.com.key -set_serial 1 -in httpbin-client.example.com.csr -out httpbin-client.example.com.crt
+   $ curl -v -HHost:helloworld-v1.example.com --resolve "helloworld-v1.example.com:$SECURE_INGRESS_PORT:$INGRESS_HOST" \
+   --cacert example.com.crt "https://helloworld-v1.example.com:$SECURE_INGRESS_PORT/hello"
+   
+   ...
+   < HTTP/1.1 200 OK
+   < content-type: text/html; charset=utf-8
+   < content-length: 60
+   < server: istio-envoy
+   < date: Sat, 23 May 2020 07:38:40 GMT
+   < x-envoy-upstream-service-time: 143
+   <
+   Hello version: v1, instance: helloworld-v1-5dfcf5d5cd-2l44c
+   * Connection #0 to host helloworld-v1.example.com left intact
    ```
 
-5. 带上客户端证书重新执行curl，可以看到执行成功：
+8. 向 `httpbin.example.com`发送请求
 
    ```shell
-   $ curl -HHost:httpbin.example.com --resolve httpbin.example.com:$SECURE_INGRESS_PORT:$INGRESS_HOST --cacert ./example.com.crt --cert ./httpbin-client.example.com.crt --key ./httpbin-client.example.com.key https://httpbin.example.com:$SECURE_INGRESS_PORT/status/418
+   $ curl -v -HHost:httpbin.example.com --resolve "httpbin.example.com:$SECURE_INGRESS_PORT:$INGRESS_HOST" \
+   --cacert example.com.crt "https://httpbin.example.com:$SECURE_INGRESS_PORT/status/418"
    
+    ...
        -=[ teapot ]=-
    
           _...._
@@ -443,171 +671,67 @@ TLS需要的私钥，服务端证书，根证书是使用基于文件装载的�
          |       ;/
          \_     _/
            `"""`
+   * Connection #0 to host httpbin.example.com left intact
    ```
 
-### 为多个主机配置TLS ingress网关
+### 配置一个mutual TLS ingress网关
 
-本节会为多个主机(`httpbin.example.com`和`bookinfo.com`.)配置一个ingress网关。ingress网关会给客户端请求的每个服务端提供唯一的证书。
+删除之前的secreting创建一个新的secret，server会使用该CA证书校验client，使用`cacert`保存CA证书。
 
-与前面章节不同，istio的默认ingress网关将无法正在工作，因为它预配置为仅支持一个安全主机。因此需要首先使用另一个secret配置并重新部署ingress网关服务，这样才能处理第二个主机。
-
-#### 为`bookinfo.com`创建一个服务端证书和私钥
-
-```shell
-$ openssl req -out bookinfo.com.csr -newkey rsa:2048 -nodes -keyout bookinfo.com.key -subj "/CN=bookinfo.com/O=bookinfo organization"
-$ openssl x509 -req -days 365 -CA example.com.crt -CAkey example.com.key -set_serial 2 -in bookinfo.com.csr -out bookinfo.com.crt
+```shel
+$ kubectl -n istio-system delete secret httpbin-credential
+$ kubectl create -n istio-system secret generic httpbin-credential --from-file=tls.key=httpbin.example.com.key \
+--from-file=tls.crt=httpbin.example.com.crt --from-file=ca.crt=example.com.crt
 ```
 
-#### 使用新的证书重新部署`istio-ingressgateway` 
+1. 将gateway的TLS模式设置为`MUTUAL`
 
-1. 创建一个新的secret，保存了 `bookinfo.com`的证书：
-
-   ```shell
-   $ kubectl create -n istio-system secret tls istio-ingressgateway-bookinfo-certs --key bookinfo.com.key --cert bookinfo.com.crt
-   ```
-
-2. 为了挂载新创建的secret，需要更新`istio-ingressgateway`的deployment。修改`istio-ingressgateway`的deployment，创建如下 `gateway-patch.json` 文件。经过下面修改，会在deployment中增加一个卷，将secret `istio-ingressgateway-bookinfo-certs`挂载到`/etc/istio/ingressgateway-bookinfo-certs`中
-
-   ```shell
-   $ cat > gateway-patch.json <<EOF
-   [{
-     "op": "add",
-     "path": "/spec/template/spec/containers/0/volumeMounts/0",
-     "value": {
-       "mountPath": "/etc/istio/ingressgateway-bookinfo-certs",
-       "name": "ingressgateway-bookinfo-certs",
-       "readOnly": true
-     }
-   },
-   {
-     "op": "add",
-     "path": "/spec/template/spec/volumes/0",
-     "value": {
-     "name": "ingressgateway-bookinfo-certs",
-       "secret": {
-         "secretName": "istio-ingressgateway-bookinfo-certs",
-         "optional": true
-       }
-     }
-   }]
-   EOF
-   ```
-
-3. 使用如下命令修改 `istio-ingressgateway` deployment
-
-   ```shell
-   $ kubectl -n istio-system patch --type=json deploy istio-ingressgateway -p "$(cat gateway-patch.json)"
-   ```
-
-4. 校验 `istio-ingressgateway` pod成功加载了密钥和证书，即目录中出现`tls.crt`和`tls.key` 
-
-   ```shell
-   $ kubectl exec -it -n istio-system $(kubectl -n istio-system get pods -l istio=ingressgateway -o jsonpath='{.items[0].metadata.name}') -- ls -al /etc/istio/ingressgateway-bookinfo-certs
-   ```
-
-#### 配置`bookinfo.com` 主机流量
-
-1. 创建不带gateway的[bookinfo](https://istio.io/docs/examples/bookinfo/)应用
-
-   ```shell
-   $ kubectl apply -f samples/bookinfo/platform/kube/bookinfo.yaml
-   ```
-
-2. 为 `bookinfo.com`定义一个gateway：
-
-   ```shell
-   $ kubectl apply -f - <<EOF
+   ```yaml
+   $ cat <<EOF | kubectl apply -f -
    apiVersion: networking.istio.io/v1alpha3
    kind: Gateway
    metadata:
-     name: bookinfo-gateway
+    name: mygateway
    spec:
-     selector:
-       istio: ingressgateway # use istio default ingress gateway
-     servers:
-     - port:
-         number: 443
-         name: https-bookinfo
-         protocol: HTTPS
-       tls: # tls用到了上面secret挂载的证书和密钥
-         mode: SIMPLE
-         serverCertificate: /etc/istio/ingressgateway-bookinfo-certs/tls.crt
-         privateKey: /etc/istio/ingressgateway-bookinfo-certs/tls.key
-       hosts:
-       - "bookinfo.com" #外部主机
+    selector:
+      istio: ingressgateway # use istio default ingress gateway
+    servers:
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      tls:
+        mode: MUTUAL #TLS模式设置为MUTUAL
+        credentialName: httpbin-credential # must be the same as secret
+      hosts:
+      - httpbin.example.com
    EOF
    ```
 
-3. 为`bookinfo.com`定义一个路由。定义一个根[`samples/bookinfo/networking/bookinfo-gateway.yaml`](https://raw.githubusercontent.com/istio/istio/release-1.5/samples/bookinfo/networking/bookinfo-gateway.yaml)类似的`VirtualService`
+2. 使用先前的方式发送HTTPS请求，可以看到访问失败
 
    ```shell
-   $ kubectl apply -f - <<EOF
-   apiVersion: networking.istio.io/v1alpha3
-   kind: VirtualService
-   metadata:
-     name: bookinfo
-   spec:
-     hosts:
-     - "bookinfo.com"
-     gateways:
-     - bookinfo-gateway
-     http:
-     - match:
-       - uri:
-           exact: /productpage
-       - uri:
-           exact: /login
-       - uri:
-           exact: /logout
-       - uri:
-           prefix: /api/v1/products
-       route:
-       - destination:
-           host: productpage
-           port:
-             number: 9080
-   EOF
-   ```
-
-4. 向Bpokinfo `productpage`发送请求：
-
-   ```shell
-   $ curl -o /dev/null -s -v -w "%{http_code}\n" -HHost:bookinfo.com --resolve bookinfo.com:$SECURE_INGRESS_PORT:$INGRESS_HOST --cacert example.com.crt -HHost:bookinfo.com https://bookinfo.com:$SECURE_INGRESS_PORT/productpage
-   
-   * Added bookinfo.com:31785:172.20.127.211 to DNS cache
-   * About to connect() to bookinfo.com port 31785 (#0)
+   $ curl -v -HHost:httpbin.example.com --resolve "httpbin.example.com:$SECURE_INGRESS_PORT:$INGRESS_HOST" \
+   > --cacert example.com.crt "https://httpbin.example.com:$SECURE_INGRESS_PORT/status/418"
+   * Added httpbin.example.com:31967:172.20.127.211 to DNS cache
+   * About to connect() to httpbin.example.com port 31967 (#0)
    *   Trying 172.20.127.211...
-   * Connected to bookinfo.com (172.20.127.211) port 31785 (#0)
+   * Connected to httpbin.example.com (172.20.127.211) port 31967 (#0)
    * Initializing NSS with certpath: sql:/etc/pki/nssdb
    *   CAfile: example.com.crt
      CApath: none
-   * SSL connection using TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
-   * Server certificate:
-   *       subject: O=bookinfo organization,CN=bookinfo.com
-   *       start date: May 21 13:28:51 2020 GMT
-   *       expire date: May 21 13:28:51 2021 GMT
-   *       common name: bookinfo.com
-   *       issuer: CN=example.com,O=example Inc.
-   > GET /productpage HTTP/1.1
-   > User-Agent: curl/7.29.0
-   > Accept: */*
-   > Host:bookinfo.com
-   > Host:bookinfo.com
-   >
-   < HTTP/1.1 404 Not Found
-   < date: Thu, 21 May 2020 13:34:23 GMT
-   < server: istio-envoy
-   < content-length: 0
-   <
-   * Connection #0 to host bookinfo.com left intact
-   404
+   * NSS: client certificate not found (nickname not specified)
+   * NSS error -12227 (SSL_ERROR_HANDSHAKE_FAILURE_ALERT)
+   * SSL peer was unable to negotiate an acceptable set of security parameters.
+   * Closing connection 0
+   curl: (35) NSS: client certificate not found (nickname not specified)
    ```
 
-5. 校验`httbin.example.com` 是否也跟签名一样可达。
+3. 生成client的证书和私钥。在`curl`中传入客户端的证书和私钥，使用`--cert`传入客户端证书，使用`--key`传入私钥
 
    ```shell
-   $ curl -HHost:httpbin.example.com --resolve httpbin.example.com:$SECURE_INGRESS_PORT:$INGRESS_HOST --cacert example.com.crt --cert ./httpbin-client.example.com.crt --key httpbin-client.example.com.key https://httpbin.example.com:$SECURE_INGRESS_PORT/status/418
-   
+   $ curl -v -HHost:httpbin.example.com --resolve "httpbin.example.com:$SECURE_INGRESS_PORT:$INGRESS_HOST" --cacert example.com.crt --cert ./client.example.com.crt --key ./client.example.com.key "https://httpbin.example.com:$SECURE_INGRESS_PORT/status/418"
+   ...
        -=[ teapot ]=-
    
           _...._
@@ -616,7 +740,15 @@ $ openssl x509 -req -days 365 -CA example.com.crt -CAkey example.com.key -set_se
        \_;`"---"`|//
          |       ;/
          \_     _/
+           `"""`
+   * Connection #0 to host httpbin.example.com left intact
    ```
+
+istio支持几种不同的Secret格式，来支持与多种工具的集成，如[cert-manager](https://istio.io/docs/ops/integrations/certmanager/):
+
+- 一个TLS Secret使用`tls.key`和`tls.crt`；对于mutual TLS，会用到`ca.crt`
+- 一个generic Secret会用到`key`和`cert`；对于mutual TLS，会用到`cacert`
+- 一个generic Secret会用到`key`和`cert`；对于mutual TLS，会用到一个单独的名为 `<secret>-cacert`的generic Secret，以及一个`cacert` key。例如`httpbin-credential` 包含`key` 和`cert`，`httpbin-credential-cacert` 包含`cacert`
 
 ### 问题定位
 
@@ -627,35 +759,24 @@ $ openssl x509 -req -days 365 -CA example.com.crt -CAkey example.com.key -set_se
   $ echo INGRESS_HOST=$INGRESS_HOST, SECURE_INGRESS_PORT=$SECURE_INGRESS_PORT
   ```
 
-- 校验密钥和证书被成功加载到`istio-ingressgateway` pod中，存在`tls.crt` 和`tls.key`
+- 检查`istio-ingressgateway`控制器的错误日志
 
   ```shell
-  $ kubectl exec -it -n istio-system $(kubectl -n istio-system get pods -l istio=ingressgateway -o jsonpath='{.items[0].metadata.name}') -- ls -al /etc/istio/ingressgateway-certs
+  $ kubectl logs -n istio-system "$(kubectl get pod -l istio=ingressgateway \
+  -n istio-system -o jsonpath='{.items[0].metadata.name}')"
   ```
 
-- 如果创建了`istio-ingressgateway-certs` secret，但没有加载密钥和证书，删除ingress网关，强制ingress网关pod重新加载key和证书
+- 校验`istio-system`命名空间中成功创建了secret。上例中应该存在`httpbin-credential`和`helloworld-credential` 
 
   ```shell
-  $ kubectl delete pod -n istio-system -l istio=ingressgateway
+  $ kubectl -n istio-system get secrets
   ```
 
-- 校验证书中的Subject字段是正确的
+- 校验ingress网关agent将密钥/证书对上传到了ingress网关
 
   ```shell
-  $ kubectl exec -i -n istio-system $(kubectl get pod -l istio=ingressgateway -n istio-system -o jsonpath='{.items[0].metadata.name}')  -- cat /etc/istio/ingressgateway-certs/tls.crt | openssl x509 -text -noout | grep 'Subject:'
-          Subject: CN=httpbin.example.com, O=httpbin organization
-  ```
-
-- 校验ingress网关的代理是否已经知道配置了证书
-
-  ```shell
-  $ kubectl exec -ti $(kubectl get po -l istio=ingressgateway -n istio-system -o jsonpath='{.items[0].metadata.name}') -n istio-system -- pilot-agent request GET certs
-  ```
-
-- 校验`istio-ingressgateway` 的日志
-
-  ```shell
-  $ kubectl logs -n istio-system -l istio=ingressgateway
+  $ kubectl logs -n istio-system "$(kubectl get pod -l istio=ingressgateway \
+  -n istio-system -o jsonpath='{.items[0].metadata.name}')"
   ```
 
 #### 定位mutul TLS问题
@@ -679,63 +800,39 @@ $ openssl x509 -req -days 365 -CA example.com.crt -CAkey example.com.key -set_se
           Subject: O=example Inc., CN=example.com
   ```
 
+  log中可以看到添加了`httpbin-credential` secret。如果使用mutual TLS，那么也会出现 `httpbin-credential-cacert` secret。校验log中显示了网关agent从ingress网关接收到了SDS请求，资源的名称为 `httpbin-credential`，且ingress网关获取到了密钥/证书对。如果使用了mutual TLS，日志应该显示将密钥/证书发送到ingress网关，网关agent接收到了带 `httpbin-credential-cacert` 资源名称的SDS请求，并回去到了根证书。
+
 ### 卸载
 
 1. 删除`Gateway`配置，`VirtualService`和secret
 
    ```shell
-   $ kubectl delete gateway --ignore-not-found=true httpbin-gateway bookinfo-gateway
+   $ kubectl delete gateway mygateway
    $ kubectl delete virtualservice httpbin
-   $ kubectl delete --ignore-not-found=true -n istio-system secret istio-ingressgateway-certs istio-ingressgateway-ca-certs
-   $ kubectl delete --ignore-not-found=true virtualservice bookinfo
+   $ kubectl delete --ignore-not-found=true -n istio-system secret httpbin-credential \
+   helloworld-credential
+   $ kubectl delete --ignore-not-found=true virtualservice helloworld-v1
    ```
 
 2. 删除证书目录
 
    ```shell
-   $ rm -rf example.com.crt example.com.key httpbin.example.com.crt httpbin.example.com.key httpbin.example.com.csr httpbin-client.example.com.crt httpbin-client.example.com.key httpbin-client.example.com.csr bookinfo.com.crt bookinfo.com.key bookinfo.com.csr
+   $ rm -rf example.com.crt example.com.key httpbin.example.com.crt httpbin.example.com.key httpbin.example.com.csr helloworld-v1.example.com.crt helloworld-v1.example.com.key helloworld-v1.example.com.csr client.example.com.crt client.example.com.csr client.example.com.key ./new_certificates
    ```
 
-3. 删除重新部署`istio-ingressgateway`时的补丁文件：
+3. 停止`httpbin`和`helloworld-v1` 服务：
 
    ```shell
-   $ rm -f gateway-patch.json
+   $ kubectl delete deployment --ignore-not-found=true httpbin helloworld-v1
+   $ kubectl delete service --ignore-not-found=true httpbin helloworld-v1
    ```
 
-4. 停止`httpbin`服务：
+## [不终止TLS的ingress网关](https://istio.io/docs/tasks/traffic-management/ingress/ingress-sni-passthrough/)
 
-   ```shell
-   $ kubectl delete --ignore-not-found=true -f samples/httpbin/httpbin.yaml
-   ```
+上一节中描述了如何配置HTTPS ingree来访问一个HTTP服务。本节中描述如何配置HTTPS ingrss来访问HTTPS服务等。通过配置ingress网关来执行SNI方式的访问，而不是在传入请求时终止TLS。
 
-## 安全网关(SDS)
-
-本节讲述如何使用simple或mutual TLS暴露安全的HTTPS服务。
-
-TLS需要的私钥，服务端证书，根证书是使用基于Secret Discovery Service (SDS)方法配置的。
-
-执行[ingress流量控制](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control/)中的[Before you begin](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control#before-you-begin) 和[Determining the ingress IP and ports](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control/#determining-the-ingress-ip-and-ports)小节的操作，部署`httpbin`服务，并获取 `INGRESS_HOST` 和`SECURE_INGRESS_PORT`变量。
+本例中使用一个NGINX服务器作为HTTPS服务。
 
 ### 生成客户端和服务端的证书和密钥
 
-1. 创建根证书和私钥，用于签名服务
-
-   ```shell
-   $ openssl req -x509 -sha256 -nodes -days 365 -newkey rsa:2048 -subj '/O=example Inc./CN=example.com' -keyout example.com.key -out example.com.crt
-   ```
-
-2. 为 `httpbin.example.com`创建证书和私钥
-
-   ```shell
-   $ openssl req -out httpbin.example.com.csr -newkey rsa:2048 -nodes -keyout httpbin.example.com.key -subj "/CN=httpbin.example.com/O=httpbin organization"
-   $ openssl x509 -req -days 365 -CA example.com.crt -CAkey example.com.key -set_serial 0 -in httpbin.example.com.csr -out httpbin.example.com.crt
-   ```
-
-使用SDS配置TLS ingress网关
-
-
-
-
-
-
-
+1. 

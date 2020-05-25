@@ -6,7 +6,7 @@
 
 ### 安装Istio
 
-本次安装的Istio版本为1.5.2，环境为openshift 4.3
+本次安装的Istio版本为1.6.0，环境为openshift 4.3
 
 注：不建议使用openshift 1.11(即kubernetes 3.11)安装istio，可能会出现如下兼容性问题，参见此[issue](https://github.com/jetstack/cert-manager/issues/2200)
 
@@ -51,7 +51,7 @@ EOF
 $ oc adm policy add-scc-to-group anyuid system:serviceaccounts:istio-system
 ```
 
-istio默认会注入一个名为`istio-init`的`initContainer`，用于将pod的网络流量导向istio的sidecar proxy，该`initContainer`需要用到完整的`NET_ADMIN`和`NET_RAW` capabilities来配置网络，由此可能造成安全问题，使用istio CNI插件可以**替换**`istio-init`，且无需提升kubernetes RBAC权限，见下：
+istio默认会注入一个名为`istio-init`的`initContainer`，用于将pod的网络流量导向istio的sidecar proxy，该`initContainer`需要用到完整的`NET_ADMIN`和`NET_RAW` capabilities来配置网络，由此可能造成安全问题，使用istio CNI插件可以**替换**`istio-init`，且无需提升kubernetes RBAC权限，区别见下：
 
 ```yaml
 # with istio-cni
@@ -225,12 +225,12 @@ istio默认支持如下6种profile
 ```shell
 # istioctl profile list
 Istio configuration profiles:
-    empty
-    minimal
-    remote
-    separate
     default
     demo
+    empty
+    minimal
+    preview
+    remote
 ```
 
 安装的组件的区别如下：
@@ -347,6 +347,82 @@ $ istioctl manifest generate <your original installation options> | kubectl dele
 
 ### 更新Istio
 
+#### 金丝雀升级
+
+`revision`安装方式支持同时部署多个版本的istio，在升级时可以将流量逐步转移到新版本的istio上。每个修订`revision`都是一个完整的istio控制面，具有独立的`Deployment`, `Service`等。
+
+##### 控制面升级
+
+使用如下方式可以安装一个名为`canary`的istio修订版本。下面方式默认会使用`default` profile创建一套新的istio，如果新的istio和老的istio有组件重叠，则可能导致组件重建。从下面的`AGE`字段可以看出，新的`Prometheus`覆盖了老的`Prometheus`，`ingressgateway`也一样，因此最好的方式是指定文件，参见[istio install](https://istio.io/docs/reference/commands/istioctl/#istioctl-install)
+
+```shell
+$ istioctl install --set revision=canary
+```
+
+命令执行成功后，可以看到存在2个控制面，每个控制面有各自的`Deployment`，`Service`等。
+
+```shell
+$ oc get pod
+NAME                                   READY   STATUS    RESTARTS   AGE
+istio-ingressgateway-c9648ffbd-9pmwk   1/1     Running   0          113m
+istiod-788cf6c878-cmn47                1/1     Running   0          139m
+istiod-canary-79599d745b-ph7gj         1/1     Running   0          113m
+prometheus-597596ffdd-v28hk            2/2     Running   0          113m
+
+$ oc get deploy
+NAME                   READY   UP-TO-DATE   AVAILABLE   AGE
+istio-ingressgateway   1/1     1            1           138m
+istiod                 1/1     1            1           139m
+istiod-canary          1/1     1            1           113m
+prometheus             1/1     1            1           138m
+```
+
+sidecar注入配置也有2套
+
+```shell
+$ oc get mutatingwebhookconfigurations
+NAME                            CREATED AT
+istio-sidecar-injector          2020-05-22T02:42:57Z
+istio-sidecar-injector-canary   2020-05-22T03:08:28Z
+```
+
+##### 数据面升级
+
+创建新的istio修订版本并不会影响现有的代理。为了升级代理，需要将代理的配置指向新的控制面。通过命名空间标签`istio.io/rev`设置控制sidecar注入的控制面。
+
+下面操作升级了`test-ns`命名空间，移除标签`istio-injection`，并增加标签`istio.io/rev`，指向新的istio `canary`。注意必须移除标签`istio-injection`，否则istio会优先处理`istio-injection`(原因是为了向后兼容)
+
+```shell
+$ kubectl label namespace test-ns istio-injection- istio.io/rev=canary
+```
+
+在升级命名空间后，需要重启pod来触发sidecar的注入，如下使用滚动升级
+
+```shell
+$ kubectl rollout restart deployment -n test-ns
+```
+
+通过如下方式可以查看使用`canary`istio修订版的pod
+
+```shell
+$ kubectl get pods -n test-ns -l istio.io/rev=canary
+```
+
+为了验证test-ns命名空间中的新pod使用了istiod-canary服务，可以选择一个pod使用如下命令进行验证。从输出中可以看到其使用了`istiod-canary`控制面
+
+```shell
+$ istioctl proxy-config endpoints ${pod_name}.test-ns --cluster xds-grpc -ojson | grep hostname
+"hostname": "istiod-canary.istio-system.svc"
+```
+
+可以通过如下方式导出`canary`修订版的配置信息
+
+```shell
+$ istioctl manifest generate --revision=canary >canary.yaml
+```
+
+#### 替换升级
+
 > 升级过程中可能会造成流量中断，为了最小化影响，需要确保istio中的各个组件(除Citadel)至少有两个副本正在运行，此外需要通过[PodDistruptionBudgets](https://kubernetes.io/docs/tasks/run-application/configure-pdb/)保证至少有一个可用的pod
 
 - 首先下载最新的istio
@@ -408,7 +484,7 @@ sidecar的(手动或自动)注入会用到`istio-sidecar-injector` configmap。
     $ istioctl kube-inject -f samples/sleep/sleep.yaml | kubectl apply -f -
     ```
 
-    可以使用如下方式直接导出注入sidecar的deployment，并使用kubectl直接部署
+    可以使用如下方式直接先导出注入sidecar的deployment，然后使用kubectl直接部署
 
     ```shell
     $ istioctl kube-inject -f samples/sleep/sleep.yaml -o sleep-injected.yaml --injectConfigMapName istio-sidecar-injector
