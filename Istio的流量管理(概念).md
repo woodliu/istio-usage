@@ -58,7 +58,7 @@ metadata:
   name: reviews
 spec:
   hosts:
-  - reviews #虚拟service
+  - reviews #虚拟service，客户端请求中的目的地址。内部访问时与k8s service名称相同；外部访问内部时，与外              部客户端的目的地相同，内部访问外部时，与内部客户端的目的地相同
   http:
   - match:
     - headers:
@@ -66,8 +66,8 @@ spec:
           exact: jason
     route:
     - destination:
-        host: reviews #对应kubernetes的service "reviews"
-        subset: v2    #对应destination rule中的服务子集
+        host: reviews #对应kubernetes的service "reviews"，与DestinationRule的host相同，均为注册到注册中心的service表项
+        subset: v2    #对应destination rule中的服务子集，有了subset就会用到DestinationRule
   - route:
     - destination:
         host: reviews
@@ -76,7 +76,7 @@ spec:
 
 ##### hosts字段
 
-`hosts`字段列出了virtual service的主机，即用户可寻址的目标或路由规则应用的目标。它是客户端向服务发送请求时使用的一个或多个地址。通过该字段提供的地址访问virtual service，进而访问后端服务。在集群内部(网格内)使用时通常与kubernetes的Service同命；当需要在集群外部(网格外)访问时，该字段为gateway请求的请求的地址，即与gateway的`hosts`字段相同，也可采用DNS的模糊匹配。
+`hosts`字段列出了virtual service的主机，即用户可寻址的目标或路由规则应用的目标。**它是客户端向服务发送请求时使用的一个或多个地址**。通过该字段提供的地址访问virtual service，进而访问后端服务。在集群内部(网格内)使用时通常与kubernetes的Service同命；当需要在集群外部(网格外)访问时，该字段为gateway请求的请求的地址，即与gateway的`hosts`字段相同，也可采用DNS的模糊匹配。
 
 ```yaml
 hosts:
@@ -104,7 +104,7 @@ virtual service的主机名可以是IP地址、DNS名称，也可以是短名称
 
 ##### destination
 
-路由部分的`destination`字段指定了匹配条件的流量的实际地址。与virtual service的主机不同，该`host`必须是存在于istio的服务注册表中的真实目的地，否则Envoy不知道应该将流量发送到哪里。它可以是一个带代理的网格服务或使用`service entry`添加的非网格服务。在kubernetes作为平台的情况下，`host`表示名为kubernetes的service名称：
+路由部分的`destination`字段指定了匹配条件的流量的实际地址。与virtual service的主机不同，**该`host`必须是存在于istio的服务注册表(如kubernetes services，consul services等)中的真实目的地或由[ServiceEntries](https://istio.io/docs/reference/config/networking/service-entry/#ServiceEntry)声明的hosts**，否则Envoy不知道应该将流量发送到哪里。它可以是一个带代理的网格服务或使用`service entry`添加的非网格服务。在kubernetes作为平台的情况下，`host`表示名为kubernetes的service名称：
 
 ```yaml
 route:
@@ -219,7 +219,7 @@ kind: DestinationRule
 metadata:
   name: my-destination-rule
 spec:
-  host: my-svc
+  host: my-svc # 流量分发的目的地，k8s的service或serviceEntry声明的hosts
   trafficPolicy:     #默认的负载均衡策略模型为随机
     loadBalancer:
       simple: RANDOM
@@ -244,7 +244,7 @@ spec:
 
 ### [Gateway](https://istio.io/docs/reference/config/networking/gateway/#Gateway) 
 
-gateway用于管理进出网格的流量，指定可以进入或离开网格的流量。gateway配置应用于网格边缘的独立的Envoy代理上，而不是服务负载的Envoy代理上。
+gateway用于管理**进出**网格的流量，指定可以进入或离开网格的流量(`Gateway`既可以支持ingress流量，也可以支持egress流量)。gateway配置应用于网格边缘的独立的Envoy代理上，而不是服务负载的Envoy代理上。
 
 与其他控制进入系统的流量的机制(如kubernetes ingress API)不同，istio gateway允许利用istio的流量路由的强大功能和灵活性。istio的gateway资源仅允许配置4-6层的负载属性，如暴露的端口，TLS配置等等，但结合istio的virtual service，就可以像管理istio网格中的其他数据面流量一样管理gateway的流量。
 
@@ -302,15 +302,15 @@ metadata:
 spec:
   hosts:
   - ext-host.example.com
-  gateways:        #将gateway "ext-host-gwy"绑定到virtual service "virtual-svc"上
+  gateways:        #将gateway "ext-host-gwy"绑定到virtual service "virtual-svc"上，接收并处理来自该gateway的流量
   - ext-host-gwy
 ```
 
 ### [Service entries](https://istio.io/docs/reference/config/networking/service-entry/#ServiceEntry)
 
-*可以看作是一个网格外部的virtual service*
+*可以看作是一个网格外部的virtual service，与kubernetes service流量方向相反*
 
-使用service entry可以在istio内部维护的service registry中注册一个表项。在添加service entry后，Envoy代理就可以将流量转发到该服务上(就像服务是网格中的服务一样)。配置service entry允许管理网格外的服务的流量，包括：
+使用service entry可以在istio内部维护的service registry中注册一个表项。在添加service entry后，Envoy代理就可以将流量转发到该服务上(就像服务是网格中的服务一样)。配置service entry可以允许管理网格外的服务的流量，包括：
 
 - 重定向和转发到达外部目的地的流量，例如web使用的api，或者使用遗留基础设施提供的服务。
 - 为外部目的地定义重试，超时和故障注入策略
@@ -328,7 +328,7 @@ metadata:
   name: svc-entry
 spec:
   hosts:
-  - ext-svc.example.com   #外部服务
+  - ext-svc.example.com   #外部服务，与匹配的VirtualServices和DestinationRules中的hosts字段相同
   ports:                  #外部服务对应的端口
   - number: 443
     name: https
@@ -337,7 +337,7 @@ spec:
   resolution: DNS         #主机服务的发现模型
 ```
 
-使用`hosts`字段指定外部资源，该字段可以是一个完整的域名，也可以是使用前缀通配符的域名。
+使用`hosts`字段可以是一个完整的域名，也可以是使用前缀通配符的域名。
 
 可以使用virtual service和destination rule来控制到达一个service entry的流量。例如，下面destination rule配置了流量路由使用mutual TLS来加密到达外部服务`ext-svc.example.com`间的连接。
 
@@ -347,7 +347,7 @@ kind: DestinationRule
 metadata:
   name: ext-res-dr
 spec:
-  host: ext-svc.example.com
+  host: ext-svc.example.com #此处的host为serviceEntry注册到注册中心的表项
   trafficPolicy:
     tls:
       mode: MUTUAL
@@ -491,3 +491,10 @@ spec:
 istio的故障恢复功能对应用来说是完全透明的。一个应用无法知道一个Envoy sidecar代理是否为一个被调用的服务配置了失败处理功能。这意味着如果在应用代理中设置了故障恢复策略，则需要注意这两个策略是相互独立的，有可能发送冲突。例如，假设有两个超时设置，一个配置在virtual service中，一个配置在应用中。应用为调用某个服务的API设置的超时为2s；而virtual service中设置的超时为3s，重试次数为1。这种情况下，应用首先会发送超时，Envoy的超时和重试将失效。
 
 虽然istio的故障恢复功能提升了网格中服务的可靠性和可用性，但应用仍然需要处理故障或错误，并做出相应动作。例如，当一个负载均衡池中的所有实例都失败后，Envoy会返回`HTTP 503`错误，应用必须实现对HTTP 503错误码做出反馈。
+
+### 总结
+
+- istio流量控制的入口为`VirtualService`
+- `VirtualService`+`DestinationRule`可以将流量分发到注册中心中存在的service或`ServiceEntry`声明的hosts上
+- `VirtualService`+`DestinationRule`+`Gateway`可以将外部请求的流量引入网格内，外部流量会通过`Gateway`指定的ingress Pod进入网格，然后使用`VirtualService`+`DestinationRule`进行流量控制
+- `VirtualService`+`DestinationRule`+`ServiceEntry`可以将网格内部请求的流量转发到网格外部

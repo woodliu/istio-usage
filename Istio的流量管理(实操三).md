@@ -257,29 +257,159 @@ $ kubectl get configmap istio -n istio-system -o yaml | sed 's/mode: REGISTRY_ON
 
 本节展示如何通过配置istio来(对到外部服务的流量)初始化TLS。当原始流量为HTTP时，Istio会与外部服务建立HTTPS连接，即istio会加密到外部服务的请求。
 
+创建`sleep`应用
 
+```shell
+$ kubectl apply -f samples/sleep/sleep.yaml
+```
 
+获取`sleep`的pod名
 
+```shell
+$ export SOURCE_POD=$(kubectl get pod -l app=sleep -o jsonpath={.items..metadata.name})
+```
 
+创建`ServiceEntry` 和`VirtualService`访问 `edition.cnn.com`
 
+```shell
+$ kubectl apply -f - <<EOF
+apiVersion: networking.istio.io/v1alpha3
+kind: ServiceEntry
+metadata:
+  name: edition-cnn-com
+spec:
+  hosts:
+  - edition.cnn.com
+  ports:
+  - number: 80     # HTTP访问
+    name: http-port
+    protocol: HTTP
+  - number: 443    # HTTPS访问
+    name: https-port
+    protocol: HTTPS
+  resolution: DNS
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: edition-cnn-com
+spec:
+  hosts:
+  - edition.cnn.com #客户端访问的外部地址
+  tls:
+  - match:
+    - port: 443
+      sniHosts:
+      - edition.cnn.com
+    route:
+    - destination:
+        host: edition.cnn.com #与gateway不同，此处并没有将virtualservice与serviceentry进行绑定
+        port:
+          number: 443
+      weight: 100
+EOF
+```
 
+访问外部服务，下面使用了`-L`选项使请求端依照返回的重定向信息重新发起请求。第一个请求会发往`http://edition.cnn.com/politics`，服务端会返回重定向信息，第二个请求会按照重定向信息发往`https://edition.cnn.com/politics`。可以看到第一次是`HTTP`访问，第二次是`HTTPS`访问。
 
+```shell
+$ kubectl exec -it $SOURCE_POD -c sleep -- curl -sL -o /dev/null -D - http://edition.cnn.com/politics
 
+HTTP/1.1 301 Moved Permanently
+...
+location: https://edition.cnn.com/politics
+...
 
+HTTP/2 200
+...
+```
 
+上述过程会有两个弊端：上面的第一个HTTP访问显然是冗余的；如果在应用和`edition.cnn.com` 之间存在攻击者，这样该攻击者就可以通过嗅探链路获取请求端执行的操作，存在安全风险。
 
+使用istio的TLS源可以解决如上问题。
 
+### 为Egress流量配置TLS源
 
+重新定义 `ServiceEntry` 和`VirtualService` ，并增加`DestinationRule`来执行TLS源。此时`VirtualService`会将HTTP请求流量从80端口重定向到`DestinationRule`的443端口，作为TLS源。与前面不同，此时客户端只能通过HTTP进行访问。
 
+```shell
+$ kubectl apply -f - <<EOF
+apiVersion: networking.istio.io/v1alpha3
+kind: ServiceEntry # serviceEntry跟前面配置一样
+metadata:
+  name: edition-cnn-com
+spec:
+  hosts:
+  - edition.cnn.com #注册到注册中心的host。用于选择virtualService和DestinationRule
+  ports:
+  - number: 80
+    name: http-port
+    protocol: HTTP
+  - number: 443
+    name: https-port-for-tls-origination
+    protocol: HTTPS
+  resolution: DNS
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: edition-cnn-com #请求的hosts字段
+spec:
+  hosts:
+  - edition.cnn.com #请求中的hosts字段内容
+  http:
+  - match:
+    - port: 80
+    route:
+    - destination:
+        host: edition.cnn.com #
+        subset: tls-origination
+        port:
+          number: 443
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: edition-cnn-com
+spec:
+  host: edition.cnn.com #此处与serviceEntry注册的hosts相同，将流量发往serviceEntry
+  subsets:
+  - name: tls-origination
+    trafficPolicy:
+      loadBalancer:
+        simple: ROUND_ROBIN
+      portLevelSettings:
+      - port:
+          number: 443
+        tls:
+          mode: SIMPLE # initiates HTTPS when accessing edition.cnn.com
+EOF
+```
 
+向`http://edition.cnn.com/politics`发送请求，可以看到此时会返回200，且不会经过重定向，相当于做了一个代理。
 
+```shell
+$ kubectl exec -it $SOURCE_POD -c sleep -- curl -sL -o /dev/null -D - http://edition.cnn.com/politics
+HTTP/1.1 200 OK
+...
+```
 
+### 需要考虑的安全性问题
 
+由于应用和sidecar代理之间是没有加密。因此渗透到应用所在的node节点的攻击者仍然能够看到该节点上未加密的本地通信内容。对于安全性较高的场景，建议应用直接使用HTTPS。
 
+### 卸载
 
+```shell
+$ kubectl delete serviceentry edition-cnn-com
+$ kubectl delete virtualservice edition-cnn-com
+$ kubectl delete destinationrule edition-cnn-com
+$ kubectl delete -f samples/sleep/sleep.yaml
+```
 
+## Egress 网关
 
-
+本节描述如何通过一个指定的egress网关访问外部服务。istio使用ingress和egress网关在服务网格边界配置负载均衡。一个ingress网关允许定义网格的入站点，egress网关的用法类似，定义了网格内流量的出站点。
 
 
 
