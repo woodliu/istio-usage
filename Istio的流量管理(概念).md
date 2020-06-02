@@ -494,7 +494,8 @@ istio的故障恢复功能对应用来说是完全透明的。一个应用无法
 
 ### 总结
 
-- istio流量控制的入口为`VirtualService`
-- `VirtualService`+`DestinationRule`可以将流量分发到注册中心中存在的service或`ServiceEntry`声明的hosts上
+- istio的`VirtualService`主要进行流量路由和故障注入，请求超时等；`DestinationRule`用于对路由的流量进行更细化的配置；`ServiceEntry`用于注册外部服务。如果不需要`VirtualService`提供的功能，[DestinationRule](https://istio.io/docs/tasks/traffic-management/egress/egress-gateway/#apply-kubernetes-network-policies)和[ServiceEntry](https://istio.io/docs/tasks/traffic-management/egress/egress-gateway/#egress-gateway-for-http-traffic)都可以单独使用，将流量分发到注册的`host`即可
+- `VirtualService`+`DestinationRule`可以进行流量路由，并将流量分发到注册中心中存在的service或`ServiceEntry`声明的hosts上
 - `VirtualService`+`DestinationRule`+`Gateway`可以将外部请求的流量引入网格内，外部流量会通过`Gateway`指定的ingress Pod进入网格，然后使用`VirtualService`+`DestinationRule`进行流量控制
-- `VirtualService`+`DestinationRule`+`ServiceEntry`可以将网格内部请求的流量转发到网格外部
+- `VirtualService`+`DestinationRule`+`ServiceEntry`可以将网格内部请求的流量通过sidecar代理转发到网格外部
+- `VirtualService`+`DestinationRule`+`ServiceEntry`+`Gateway`可以将网格内部请求的流量通过sidecar代理转发到指定egress网关，转发到网格外部
