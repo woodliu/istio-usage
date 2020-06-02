@@ -234,6 +234,8 @@ $ istioctl manifest apply <the flags you used to install Istio> --set values.glo
 $ kubectl delete -f samples/sleep/sleep.yaml
 ```
 
+#### 环境恢复
+
 检查当前的模式
 
 ```shell
@@ -524,10 +526,10 @@ $ istioctl manifest apply -f cni-annotations.yaml --set values.global.istioNames
      - edition.cnn.com
      gateways: #定义应用路由规则的网关
      - istio-egressgateway
-     - mesh #istio保留字段，表示网格中的所有sidecar，当忽略gateways字段时，默认会使用mesh
+     - mesh #istio保留字段，表示网格中的所有sidecar，当忽略gateways字段时，默认会使用mesh，此处表示将所有sidecar到edition.cnn.com的请求
      http:
      - match: #各个match是OR关系
-       - gateways: #将来自gateway mesh且端口为80的请求发往istio-egressgateway.istio-system.svc.cluster.local:80
+       - gateways: #将来自网格中edition.cnn.com:80的请求发往istio-egressgateway.istio-system.svc.cluster.local:80
          - mesh
          port: 80
        route:
@@ -561,10 +563,11 @@ $ istioctl manifest apply -f cni-annotations.yaml --set values.global.istioNames
    ...
    ```
 
-6. 校验egress日志(本环境并没有官方所示的打印。)
+6. 校验egress日志（需要[启用](https://istio.io/docs/tasks/observability/logs/access-log/#enable-envoy-s-access-logging)Envoy日志）
 
    ```shell
    $ kubectl logs -l istio=egressgateway -c istio-proxy -n istio-system | tail
+   [2020-06-02T08:53:08.928Z] "GET /politics HTTP/2" 200 - "-" "-" 0 1297548 5590 3641 "10.80.3.25" "curl/7.64.0" "8b131a2a-eb16-4f99-98e3-dbbdacae710f" "edition.cnn.com" "151.101.129.67:443" outbound|443||edition.cnn.com 10.83.1.219:54718 10.83.1.219:80 10.80.3.25:41204 - -
    ```
 
 #### 卸载
@@ -621,6 +624,8 @@ $ kubectl delete destinationrule egressgateway-for-cnn
 
    ```shell
    $ kubectl logs -l istio=egressgateway -n istio-system
+   ...
+   [2020-06-02T09:06:43.152Z] "- - -" 0 - "-" "-" 906 1309129 1282 - "-" "-" "-" "-" "151.101.193.67:443" outbound|443||edition.cnn.com 10.83.1.219:39574 10.83.1.219:443 10.80.3.25:35492 edition.cnn.com -
    ```
 
 #### 卸载
@@ -768,7 +773,7 @@ istio不能保证所有通过egress网关出去的流量的安全性，仅能保
     metadata:
       name: egressgateway-for-cnn
     spec:
-      host: istio-egressgateway.istio-system.svc.cluster.local
+      host: istio-egressgateway.istio-system.svc.cluster.local #内部服务地址，不需要用serviceEntry
       subsets:
       - name: cnn
     EOF
@@ -784,6 +789,8 @@ istio不能保证所有通过egress网关出去的流量的安全性，仅能保
 
     ```shell
     $ kubectl logs -l istio=egressgateway -n istio-system
+    ...
+    [2020-06-02T09:04:11.239Z] "- - -" 0 - "-" "-" 906 1309030 1606 - "-" "-" "-" "-" "151.101.1.67:443" outbound|443||edition.cnn.com 10.83.1.219:56116 10.83.1.219:443 10.80.3.25:59032 edition.cnn.com -
     ```
 
 #### 卸载网络策略
@@ -799,9 +806,205 @@ $ kubectl delete namespace test-egress
 
 ## 带TLS源的Egress网关
 
+本节展示如何通过配置一个egress网关来为到外部服务的流量发起TLS。
 
+### 部署
 
+部署sleep应用，并获取其Pod名
 
+```shell
+$ kubectl apply -f samples/sleep/sleep.yaml
+$ export SOURCE_POD=$(kubectl get pod -l app=sleep -o jsonpath={.items..metadata.name})
+```
+
+通过`meshConfig.accessLogFile`启用Envoy访问日志
+
+```shell
+$ istioctl manifest apply -f cni-annotations.yaml --set values.global.istioNamespace=istio-system --set values.gateways.istio-ingressgateway.enabled=true --set values.gateways.istio-egressgateway.enabled=true --set meshConfig.accessLogFile="/dev/stdout"
+```
+
+### 使用Egress网关发起TLS
+
+本节描述使用Egress网关作为TLS源向外部服务发起HTTPS请求。
+
+1. 为`edition.cnn.com`定义一个`ServiceEntry`:
+
+   ```shell
+   $ kubectl apply -f - <<EOF
+   apiVersion: networking.istio.io/v1alpha3
+   kind: ServiceEntry
+   metadata:
+     name: cnn
+   spec:
+     hosts:
+     - edition.cnn.com
+     ports: #可以通过80和443端口访问edition.cnn.com
+     - number: 80
+       name: http
+       protocol: HTTP
+     - number: 443
+       name: https
+       protocol: HTTPS
+     resolution: DNS
+   EOF
+   ```
+
+2. 校验可以通过`ServiceEntry`访问 [http://edition.cnn.com/politics](https://edition.cnn.com/politics)
+
+   ```shell
+   $ kubectl exec -it $SOURCE_POD -c sleep -- curl -sL -o /dev/null -D - http://edition.cnn.com/politics
+   HTTP/1.1 301 Moved Permanently
+   ...
+   
+   HTTP/2 200
+   ...
+   ```
+
+3. 为 *edition.cnn.com*创建一个`Gateway`，端口为80，以及一个destination rule，将流量定向到egress网关
+
+   ```shell
+   $ kubectl apply -f - <<EOF
+   apiVersion: networking.istio.io/v1alpha3 #定义Gateway
+   kind: Gateway
+   metadata:
+     name: istio-egressgateway
+   spec:
+     selector:
+       istio: egressgateway
+     servers:
+     - port:
+         number: 80
+         name: http-port-for-tls-origination
+         protocol: HTTP
+       hosts:
+       - edition.cnn.com
+   ---
+   apiVersion: networking.istio.io/v1alpha3
+   kind: DestinationRule
+   metadata:
+     name: egressgateway-for-cnn
+   spec:
+     host: istio-egressgateway.istio-system.svc.cluster.local #将流量定向到上面定义的Gateway
+     subsets:
+     - name: cnn
+   EOF
+   ```
+
+4. 定义一个`VirtualService`，使流量通过egress网关，并定义一个`DestinationRule`为到 `edition.cnn.com`的请求发起TLS协商
+
+   ```shell
+   $ kubectl apply -f - <<EOF
+   apiVersion: networking.istio.io/v1alpha3
+   kind: VirtualService
+   metadata:
+     name: direct-cnn-through-egress-gateway
+   spec:
+     hosts:
+     - edition.cnn.com
+     gateways:
+     - istio-egressgateway
+     - mesh
+     http:
+     - match:
+       - gateways:
+         - mesh #将网格中的edition.cnn.com:80流量分发到istio-egressgateway.istio-system.svc.cluster.local:80
+         port: 80
+       route:
+       - destination:
+           host: istio-egressgateway.istio-system.svc.cluster.local
+           subset: cnn
+           port:
+             number: 80
+         weight: 100
+     - match:
+       - gateways:
+         - istio-egressgateway #将istio-egressgateway:80流量分发到edition.cnn.com:443
+         port: 80
+       route:
+       - destination:
+           host: edition.cnn.com
+           port:
+             number: 443
+         weight: 100
+   ---
+   apiVersion: networking.istio.io/v1alpha3
+   kind: DestinationRule #配置tls
+   metadata:
+     name: originate-tls-for-edition-cnn-com
+   spec:
+     host: edition.cnn.com
+     trafficPolicy:
+       loadBalancer:
+         simple: ROUND_ROBIN
+       portLevelSettings: #选择443端口的流量
+       - port:
+           number: 443
+         tls:
+           mode: SIMPLE # initiates HTTPS for connections to edition.cnn.com
+   EOF
+   ```
+
+5. 向 [http://edition.cnn.com/politics](https://edition.cnn.com/politics)发起HTTP请求，请求成功且没有重定向。
+
+   ```shell
+   $ kubectl exec -it $SOURCE_POD -c sleep -- curl -sL -o /dev/null -D - http://edition.cnn.com/politics
+   HTTP/1.1 200 OK
+   ...
+   ```
+
+6. 校验 `istio-egressgateway`  pod的日志
+
+   ```shell
+   $ kubectl logs -l istio=egressgateway -c istio-proxy -n istio-system | tail
+   ...
+   [2020-06-02T08:53:08.928Z] "GET /politics HTTP/2" 200 - "-" "-" 0 1297548 5590 3641 "10.80.3.25" "curl/7.64.0" "8b131a2a-eb16-4f99-98e3-dbbdacae710f" "edition.cnn.com" "151.101.129.67:443" outbound|443||edition.cnn.com 10.83.1.219:54718 10.83.1.219:80 10.80.3.25:41204 - -
+   ```
+
+#### 卸载
+
+```shell
+$ kubectl delete gateway istio-egressgateway
+$ kubectl delete serviceentry cnn
+$ kubectl delete virtualservice direct-cnn-through-egress-gateway
+$ kubectl delete destinationrule originate-tls-for-edition-cnn-com
+$ kubectl delete destinationrule egressgateway-for-cnn
+```
+
+### 使用Egress网关执行双向TLS认证
+
+与前一节类似，本节描述了如何配置egress网关来实现双向TLS认证。涉及如下步骤：
+
+1. 生成客户端和服务端证书。
+2. 部署外部服务来支持双向TLS协议
+3. 重新部署egress网关，使用双向TLS证书
+
+#### 生成客户端和服务端证书
+
+1. clone  https://github.com/nicholasjackson/mtls-go-example库
+
+   ```shell
+   $ git clone https://github.com/nicholasjackson/mtls-go-example
+   ```
+
+2. 使用上面库中的脚本为`nginx.example.com`生成证书，传入自定义的密码，按`y`确认
+
+   ```shell
+   $ ./generate.sh nginx.example.com <password>
+   ```
+
+3. 将证书转移到目录中
+
+   ```shell
+   $ mkdir ../nginx.example.com && mv 1_root 2_intermediate 3_application 4_client ../nginx.example.com
+   ```
+
+4. 回到上一级目录，可以看到有一个`nginx.example.com`目录，保存了所有的证书
+
+   ```shell
+   $ cd ..
+   ```
+
+### 部署双向TLS服务
 
 
 
