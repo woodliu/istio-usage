@@ -308,7 +308,7 @@ spec:
 
 ### [Service entries](https://istio.io/docs/reference/config/networking/service-entry/#ServiceEntry)
 
-*可以看作是一个网格外部的virtual service，与kubernetes service流量方向相反*
+*可以看作是一个网格外部的virtual service，与kubernetes service流量方向相反*。
 
 使用service entry可以在istio内部维护的service registry中注册一个表项。在添加service entry后，Envoy代理就可以将流量转发到该服务上(就像服务是网格中的服务一样)。配置service entry可以允许管理网格外的服务的流量，包括：
 
@@ -328,7 +328,7 @@ metadata:
   name: svc-entry
 spec:
   hosts:
-  - ext-svc.example.com   #外部服务，与匹配的VirtualServices和DestinationRules中的hosts字段相同
+  - ext-svc.example.com   #外部服务，与匹配的VirtualServices和DestinationRules中的hosts字段相同。将https://ext-svc.example.com:443认为是外部服务
   ports:                  #外部服务对应的端口
   - number: 443
     name: https

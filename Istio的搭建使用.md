@@ -35,7 +35,7 @@ $ kubectl apply -f $HOME/generated-manifest.yaml
 首先创建`istio-system`命名空间
 
 ```yaml
-cat <<EOF | kubectl apply -f -
+$ cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Namespace
 metadata:

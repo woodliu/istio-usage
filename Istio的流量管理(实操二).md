@@ -1051,4 +1051,3 @@ istio支持几种不同的Secret格式，来支持与多种工具的集成，如
    ```shell
    $ rm ./nginx.conf
    ```
-
