@@ -1,4 +1,4 @@
-# Istio的流量管理(实操二)(istio 系列四)
+# Istio的流量管理(实操二)
 
 涵盖官方文档[Traffic Management](https://istio.io/docs/tasks/traffic-management/)章节中的inrgess部分。
 

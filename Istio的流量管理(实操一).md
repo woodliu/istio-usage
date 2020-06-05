@@ -1,4 +1,4 @@
-# Istio的流量管理(实操一)(istio 系列三)
+# Istio的流量管理(实操一)
 
 使用官方的[Bookinfo](https://istio.io/docs/examples/bookinfo/)应用进行测试。涵盖官方文档[Traffic Management](https://istio.io/docs/tasks/traffic-management/)章节中的请求路由，故障注入，流量迁移，TCP流量迁移，请求超时，熔断处理和流量镜像。不含ingress和Egree，后续再补充。
 

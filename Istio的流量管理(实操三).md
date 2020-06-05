@@ -1,4 +1,4 @@
-# shellIstio的流量管理(实操三)(istio 系列五)
+# Istio的流量管理(实操三)
 
 涵盖官方文档[Traffic Management](https://istio.io/docs/tasks/traffic-management/)章节中的egress部分。
 
@@ -1142,7 +1142,7 @@ $ kubectl delete destinationrule egressgateway-for-cnn
    ```shell
    $ kubectl apply -f - <<EOF
    apiVersion: networking.istio.io/v1alpha3
-   kind: ServiceEntry
+   kind: ServiceEntry #由于nginx.example.com不是已注册的服务，因此需要使用serviceEntry进行注册
    metadata:
      name: nginx
    spec:

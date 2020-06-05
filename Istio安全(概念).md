@@ -1,4 +1,4 @@
-## Istio 安全(概念)(istio 系列四)
+## Istio 安全(概念)
 
 [TOC]
 
