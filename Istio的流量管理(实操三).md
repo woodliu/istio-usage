@@ -439,9 +439,7 @@ $ kubectl get pod -l istio=egressgateway -n istio-system
 如果没有部署，执行如下步骤部署egress网关
 
 ```shell
-$ istioctl manifest apply -f cni-annotations.yaml --set values.global.istioNamespace=istio-system \
-    --set values.gateways.istio-ingressgateway.enabled=false \
-    --set values.gateways.istio-egressgateway.enabled=true
+$ istioctl manifest apply -f cni-annotations.yaml --set values.global.istioNamespace=istio-system --set values.gateways.istio-ingressgateway.enabled=true --set values.gateways.istio-egressgateway.enabled=true
 ```
 
 > 注意：apply的时候使用自己定制化的文件，否则系统会使用默认的profile，导致配置丢失！

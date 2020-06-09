@@ -481,7 +481,7 @@ zipkin                                                 -       -       -        
    10.80.3.58:9080     HEALTHY     OK                outbound|9080||reviews.default.svc.cluster.local
    ```
 
-流量方向为：listener(应用出站port)->route(`routeConfigName`)->cluster->endpoint(serviceName)
+流量方向为：listener(应用出站port)->route(`routeConfigName`)->cluster(domain)->endpoint(serviceName)
 
 ### 检查bootstrap配置
 
@@ -543,4 +543,336 @@ $  istioctl proxy-config bootstrap -n istio-system istio-ingressgateway-569669bb
    $ kubectl exec $(kubectl get pod -l app=sleep -n foo -o jsonpath={.items..metadata.name}) -c sleep -n foo -- curl -sS istiod.istio-system:15014/debug/endpointz
    ```
 
-   
+
+## 通过istioctl的输出理解网格
+
+> 如下内容是一个实验特性，仅用于评估
+
+istio 1.3中包含一个[istioctl experimental describe](https://istio.io/docs/reference/commands/istioctl/#istioctl-experimental-describe-pod)命令。该CLI命令提供了解影响pod的配置所需的信息。本节展示如何使用该experimental 子命令查看一个pod是否在网格中，以及检查该pod的配置。该命令的基本使用方式为：
+
+```shell
+$ istioctl experimental describe pod <pod-name>[.<namespace>] #或
+$ istioctl experimental describe pod <pod-name> -n <namespace> 
+```
+
+### 校验pod是否在网格中
+
+如果一个pod不在网格中，`istioctl describe`会显示一个告警信息，此外，如果pod缺少[istio需要的配置](https://istio.io/docs/ops/deployment/requirements/)时也会给出告警信息。
+
+```shell
+$ istioctl experimental describe pod  mutatepodimages-7575797d95-qn7p5
+Pod: mutatepodimages-7575797d95-qn7p5
+   Pod does not expose ports
+WARNING: mutatepodimages-7575797d95-qn7p5 is not part of mesh; no Istio sidecar
+--------------------
+Error: failed to execute command on sidecar: error 'execing into mutatepodimages-7575797d95-qn7p5/default istio-proxy container: container istio-proxy is not valid for pod mutatepodimages-7575797d95-qn7p5
+```
+
+如果一个pod在网格中，则不会产生告警。
+
+```shell
+$ istioctl x describe pod ratings-v1-6c9dbf6b45-xlf2q
+Pod: ratings-v1-6c9dbf6b45-xlf2q
+   Pod Ports: 9080 (details), 15090 (istio-proxy)
+--------------------
+Service: details
+   Port: http 9080/HTTP targets pod port 9080
+Pilot reports that pod enforces HTTP/mTLS and clients speak HTTP
+```
+
+输出为：
+
+- pod的服务容器端口，上述为`ratings`的9080端口
+- pod中的istio-proxy端口，15090
+- pod服务使用的协议，9080端口的http协议
+- pod设置的mutual  TLS
+
+### 校验destination rule配置
+
+可以使用`istioctl describe`检查应用到一个pod的destination rule。例如执行如下命令部署destination rule
+
+```shell
+$ kubectl apply -f samples/bookinfo/networking/destination-rule-all-mtls.yaml
+```
+
+查看`ratings` pod
+
+```shell
+$ export RATINGS_POD=$(kubectl get pod -l app=ratings -o jsonpath='{.items[0].metadata.name}')
+$ istioctl x describe pod $RATINGS_POD
+Pod: ratings-v1-6c9dbf6b45-xlf2q
+   Pod Ports: 9080 (ratings), 15090 (istio-proxy)
+--------------------
+Service: ratings
+   Port: http 9080/HTTP targets pod port 9080
+DestinationRule: ratings for "ratings"
+   Matching subsets: v1
+      (Non-matching subsets v2,v2-mysql,v2-mysql-vm)
+   Traffic Policy TLS Mode: ISTIO_MUTUAL
+Pilot reports that pod enforces HTTP/mTLS and clients speak mTLS
+```
+
+输出为：
+
+- 应用到`ratings` 服务的`ratings` destination rule
+- 匹配pod的`ratings` destination rule，上述为`v1`
+- destination rule定义的其他subset
+- pod接收HTTP或mutual TLS，但客户端使用mutual TLS
+
+### 校验virtual service配置
+
+部署如下virtual service
+
+```shell
+$ kubectl apply -f samples/bookinfo/networking/virtual-service-all-v1.yaml
+```
+
+查看`v1`版本的`reviews`服务：
+
+```shell
+$ export REVIEWS_V1_POD=$(kubectl get pod -l app=reviews,version=v1 -o jsonpath='{.items[0].metadata.name}')
+istioctl x describe pod $REVIEWS_V1_POD
+$ istioctl x describe pod $REVIEWS_V1_POD
+Pod: reviews-v1-564b97f875-q5l9r
+   Pod Ports: 9080 (reviews), 15090 (istio-proxy)
+--------------------
+Service: reviews
+   Port: http 9080/HTTP targets pod port 9080
+DestinationRule: reviews for "reviews"
+   Matching subsets: v1
+      (Non-matching subsets v2,v3)
+   Traffic Policy TLS Mode: ISTIO_MUTUAL
+VirtualService: reviews
+   1 HTTP route(s)
+```
+
+输出结果与前面的`ratings` pod类型，但多了到pod的virtual service路由。
+
+`istioctl describe`命令不仅仅显示了影响pod的virtual service。如果一个virtual service配置的host为一个pod，但流量不可达，会输出告警信息，这种请求可能发生在当一个virtual service如果没有可达的pod subset时。例如：
+
+```shell
+$ export REVIEWS_V2_POD=$(kubectl get pod -l app=reviews,version=v2 -o jsonpath='{.items[0].metadata.name}')
+istioctl x describe pod $REVIEWS_V2_POD
+[root@bastion istio-1.6.0]# istioctl x describe pod $REVIEWS_V2_POD
+Pod: reviews-v2-568c7c9d8f-vcd94
+...
+VirtualService: reviews
+   WARNING: No destinations match pod subsets (checked 1 HTTP routes)
+      Route to non-matching subset v1 for (everything)
+```
+
+告警信息给出导致问题的原因，检查的路由数目，以及其他路由信息。例如，由于virtual service将所有的流量到导入了`v1` subset，因此`v2` pod无法接收到任何流量。
+
+如果删除如下destination rule：
+
+```shell
+$ kubectl delete -f samples/bookinfo/networking/destination-rule-all-mtls.yaml
+```
+
+可以看到如下信息：
+
+```shell
+$ istioctl x describe pod $REVIEWS_V1_POD
+Pod: reviews-v1-564b97f875-q5l9r
+   Pod Ports: 9080 (reviews), 15090 (istio-proxy)
+--------------------
+Service: reviews
+   Port: http 9080/HTTP targets pod port 9080
+VirtualService: reviews
+   WARNING: No destinations match pod subsets (checked 1 HTTP routes)
+      Warning: Route to subset v1 but NO DESTINATION RULE defining subsets!
+```
+
+输出展示了已删除destination rule，但没有删除依赖它的virtual service。该virtual service将流量路由到`v1` subset，但没有定义`v1` subset的destination rule。因此流量无法分发到`v1`版本的pod。
+
+恢复环境：
+
+```shell
+$ kubectl apply -f samples/bookinfo/networking/destination-rule-all-mtls.yaml
+```
+
+### 校验流量路由
+
+`istioctl describe`也可以展示流量权重。如理如下命令会将90%的流量导入`reviews`服务的`v1` subset，将10%的流量导入`reviews`服务的`v2` subset。
+
+```shell
+$ kubectl apply -f samples/bookinfo/networking/virtual-service-reviews-90-10.yaml
+```
+
+查看reviews v1` pod：
+
+```shell
+$ istioctl x describe pod $REVIEWS_V1_POD
+...
+VirtualService: reviews
+   Weight 90%
+```
+
+输出显示90%的`reviews`服务的流量导入到了`v1` subset中。
+
+部署其他类型的路由，如部署指定HTTP首部的路由：
+
+```shell
+$ kubectl apply -f samples/bookinfo/networking/virtual-service-reviews-jason-v2-v3.yaml
+```
+
+再次查看pod：
+
+```shell
+$ istioctl x describe pod $REVIEWS_V1_POD
+...
+VirtualService: reviews
+   WARNING: No destinations match pod subsets (checked 2 HTTP routes)
+      Route to non-matching subset v2 for (when headers are end-user=jason)
+      Route to non-matching subset v3 for (everything)
+```
+
+由于查看了位于`v1` subset的pod，而virtual service将包含 `end-user=jason` 的流量分发给`v2` subset，其他流量分发给`v3` subset，`v1` subset没有任何流量导入，此时会输出告警信息。
+
+### 检查strict mutual TLS(官方文档待更新)
+
+根据[mutual TLS迁移指南](https://istio.io/docs/tasks/security/authentication/mtls-migration/)，可以给ratings服务启用strict mutual TLS。
+
+```shell
+$ kubectl apply -f - <<EOF
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: ratings-strict
+spec:
+  selector:
+    matchLabels:
+      app: ratings
+  mtls:
+    mode: STRICT
+EOF
+```
+
+执行如下命令查看`ratings` pod，输出显示`ratings` pod已经使用mutual TLS防护。
+
+```shell
+$ istioctl x describe pod $RATINGS_POD
+Pilot reports that pod enforces mTLS and clients speak mTLS
+```
+
+有时，将mutual TLS切换位`STRICT`模式时会对部署的组件造成影响，通常是因为destination rule不匹配新配置造成的。例如，如果配置Bookinfo客户端不使用mutualTLS，而使用[明文的HTTP destination rules](https://raw.githubusercontent.com/istio/istio/release-1.6/samples/bookinfo/networking/destination-rule-all.yaml):
+
+```shell
+$ kubectl apply -f samples/bookinfo/networking/destination-rule-all.yaml
+```
+
+如果在浏览器傻瓜打开Bookinfo，会显示`Ratings service is currently unavailable`，使用如下命令查看原因：
+
+```shell
+$ istioctl x describe pod $RATINGS_POD
+...
+WARNING Pilot predicts TLS Conflict on ratings-v1-f745cf57b-qrxl2 port 9080 (pod enforces mTLS, clients speak HTTP)
+  Check DestinationRule ratings/default and AuthenticationPolicy ratings-strict/default
+```
+
+输出中有一个描述destination rule和authentication policy冲突的告警信息。
+
+使用如下方式恢复：
+
+```shell
+$ kubectl apply -f samples/bookinfo/networking/destination-rule-all-mtls.yaml
+```
+
+### 卸载
+
+```shell
+$ kubectl delete -f samples/bookinfo/platform/kube/bookinfo.yaml
+$ kubectl delete -f samples/bookinfo/networking/bookinfo-gateway.yaml
+$ kubectl delete -f samples/bookinfo/networking/destination-rule-all-mtls.yaml
+$ kubectl delete -f samples/bookinfo/networking/virtual-service-all-v1.yaml
+```
+
+## 使用istioctl analyse诊断配置
+
+`istioctl analyze`是一个可以探测istio配置中潜在错误的诊断工具，它可以诊断现有的集群或一组本地配置文件，会同时诊断这两者。
+
+可以使用如下方式诊断当前的kubernetes：
+
+```shell
+$ istioctl analyze --all-namespaces
+```
+
+例如，如果某些命名空间没有启用istiod注入，会打印如下告警信息：
+
+```verilog
+Warn [IST0102] (Namespace openshift) The namespace is not enabled for Istio injection. Run 'kubectl label namespace openshift istio-injection=enabled' to enable it, or 'kubectl label namespace openshift istio-injection=disabled' to explicitly mark it as not needing injection
+```
+
+### 分析现有的集群/本地文件或二者
+
+上述的例子用于分析一个存在的集群，但该工具也可以支持分析本地kubernetes yaml的配置文件集，或同时分析本地文件和集群。当分析一个本地文件集时，这些文件集应该是完全自包含的。通常用于分析需要部署到集群的一个完整的配置文件集。
+
+分析特定的本地kubernetes yaml文件集：
+
+```shell
+$ istioctl analyze --use-kube=false a.yaml b.yaml
+```
+
+分析当前目录中的所有yaml文件：
+
+```shell
+$ istioctl analyze --use-kube=false *.yaml
+```
+
+模拟将当前目录中的files部署到当前集群中：
+
+```shell
+$ istioctl analyze *.yaml
+```
+
+使用`istioctl analyze --help`命令查看完整的选项。更多analyse的使用参见[Q&A](https://istio.io/docs/ops/diagnostic-tools/istioctl-analyze/#q-a).
+
+## 组件内省
+
+Istio组件是用一个灵活的内省框架构建的，它使检查和操作运行组件的内部状态变得简单。组件会开放一个端口，用于通过web浏览器的交互式视图获取组件的状态，或使用外部工具通过REST访问。
+
+`Mixer`, `Pilot`和`Galley` 都实现了ControlZ 功能(1.6版本可以查看istiod)。当启用这些组件时将记录一条消息，指示要连接的IP地址和端口，以便与ControlZ交互。
+
+```verilog
+2018-07-26T23:28:48.889370Z     info    ControlZ available at 100.76.122.230:9876
+```
+
+可以使用如下命令进行端口转发，类似kubectl的`port-forward`，用于远程访问。
+
+```shell
+$ istioctl dashboard controlz <podname> -n <namespaces>
+```
+
+## 组件日志
+
+### 日志作用域
+
+组件的日志按照作用域进行分类。取决于组件提供的功能，不同的组件有不同的作用域。所有的组件都有一个`default`的作用域，用于未分类的日志消息。
+
+各个组件的日志作用域参见：[reference documentation](https://istio.io/docs/reference/commands/)。
+
+每个作用域对应一个唯一的日志级别：
+
+1. none
+2. error
+3. warning
+4. info
+5. debug
+
+其中none表示没有划分作用域的输出，`debug`会最大化输出。默认的作用域为`info`，用于在一般情况下为istio提供何时的日志输出。
+
+可以使用 `--log_output_level` 控制输出级别：
+
+### 控制输出
+
+日志信息通常会发送到组件的标准输出流中。 `--log_target`选项可以将输出重定向到任意(数量的)位置，可以通过逗号分割的列表给出文件系统的路径。`stdout` 和`stderr`分别表示标准输出和标准错误输出流。
+
+### 日志滚动
+
+istio组件能够自动管理日志滚动，将大的日志切分为小的日志文件。`--log_rotate`选项允许指定用于滚动的基本文件名。派生的名称将用于单个日志文件。
+
+`--log_rotate_max_age`选项指定文件发生滚动前的最大时间(天为单位)，`--log_rotate_max_size`选项用于指定文件滚动发生前的最大文件大小(MB为单位)， `--log_rotate_max_backups`选项控制保存的滚动文件的最大数量，超过该值的老文件会被自动删除。
+
+### 组件调试
+
+`--log_caller` 和`--log_stacktrace_level`选项可以控制日志信息是否包含程序员级别的信息。在跟踪组件bug时很有用，但日常用不到。
