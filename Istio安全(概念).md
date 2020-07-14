@@ -18,7 +18,7 @@ Istio安全特性提供了强大的身份、策略、透明TLS加密，以及认
 - 深度防护：与现有的安全系统结合，来提供多个层面的防护
 - 0-信任网络：在不信任的网络上构建安全解决方案
 
-查看[multual TLS迁移文档](https://istio.io/docs/tasks/security/authentication/mtls-migration/)，在已部署的服务上使用istio安全特性。通过[安全任务](https://istio.io/docs/tasks/security/)来了解安全特性的细节。
+查看[multual TLS迁移文档](https://istio.io/docs/tasks/security/authentication/mtls-migration/)，了解如何在已部署的服务上使用istio安全特性。通过[安全任务](https://istio.io/docs/tasks/security/)了解更多的细节。
 
 ### 高层架构
 
@@ -60,7 +60,7 @@ isito通过secert发现(SDS)机制来处理身份认证，处理过程为：
 
 - istiod提供了一个gRPC服务来处理CSR(证书签名请求)
 - Envoy通过Envoy SDS API发送证书和密钥请求
-- 在接收到SDS请求后，istio agent会创建私钥和(在将携带凭据的CSR发送`istiod`前)CSR
+- 在接收到SDS请求后，istio agent会(在将携带凭据的CSR发送`istiod`前)创建私钥和CSR
 - CA会校验CSR携带的凭据，并签发CSR来生成证书
 - istio agent通过Envoy SDS API将来自isitod的证书和密钥发送给Envoy
 - 周期性地执行如上CSR处理流程来滚动证书和密钥
@@ -111,7 +111,7 @@ istio mutual TLS有一个宽容模式，它允许一个服务同时接收明文�
 
 #### 认证架构
 
-可以使用对等和请求身份认证策略为在Istio网格中接收请求的工作负载指定身份认证要求。网格操作人员可以使用`.yaml`文件指定策略。一旦部署后，会将策略保存在istio的配置存储中。isito控制器会监视配置存储。
+可以使用对等和请求身份认证策略为在Istio网格中接收请求的工作负载指定身份认证。网格操作人员可以使用`.yaml`文件指定策略。一旦部署后，会将策略保存在istio的配置存储中。isito控制器会监视配置存储。
 
 当策略变更后，新的策略会转变为合适的配置，告诉PEP如何执行需要的认证机制。控制平面可能会拉取公钥，并将其添加到配置中，用于JWT校验。或者，isito会提供istio系统管理的密钥和证书的路径，并将它们安装到应用pod中，用于mutual TLS。更多参见[身份和证书管理](https://istio.io/docs/concepts/security/#pki)。
 
@@ -147,7 +147,7 @@ spec:
 
 istio将网格范围的策略保存在根命名空间中。这些策略有一个空的`selector`，应用到网格中的所有负载上。带命名空间的策略会保存到对应的命名空间中，仅应用到该命名空间中的负载上。如果配置了`selector`字段，认证策略仅会应用到匹配的负载上。
 
-对等和请求认证策类型分别为`PeerAuthentication`和`RequestAuthentication`。
+**对等**和**请求**认证策类型分别为`PeerAuthentication`和`RequestAuthentication`。
 
 ##### Selector字段
 
@@ -446,7 +446,7 @@ spec:
         notRequestPrincipals: ["*"]
 ```
 
-##### 允许所有并默认拒绝所有认证策略
+##### 允许所有以及默认拒绝所有认证策略
 
 下例展示了一个简单的`allow-all`认证策略，该策略允许访问`default`命名空间中的所有负载。
 
@@ -476,7 +476,7 @@ spec:
 
 ##### 自定义条件
 
-可以在`when`部分指定其他条件。例如，如下`AuthorizationPolicy`定义包含一个条件，即 `request.headers[version]` 为`"v1"` 或 `"v2"`。这种情况下，key为`request.headers[version]`，属于`istiorequest.headers`属性中的一个表项。
+可以在`when`部分指定其他条件。例如，如下`AuthorizationPolicy`定义包含一个条件，即 `request.headers[version]` 为`"v1"` 或 `"v2"`。这种情况下，key为`request.headers[version]`，属于`istiorequest.headers`属性中的一项。
 
 ```yaml
 apiVersion: security.istio.io/v1beta1
@@ -556,7 +556,7 @@ isito授权支持负载使用普通TCP协议，如MongoDB。这种情况下的�
 - 授权策略对象的`source`部分的`request_principals` 字段
 - 授权策略对象的`operation`部分的`hosts`, `methods` 和`paths` 字段
 
-支持的条件参见[官方文档](https://istio.io/docs/reference/config/security/conditions/)。如果TCP负载中使用了任何仅HTTP格式的字段，istio会在授权策略中忽略这些仅HTTP格式的字段
+支持的条件参见[官方文档](https://istio.io/docs/reference/config/security/conditions/)。如果TCP负载中使用了任何仅HTTP格式的字段，istio会在授权策略中忽略这些仅HTTP格式的字段。
 
 假设一个MongoDB服务的端口为`27017`，下例配置了一个授权策略，仅允许istio网格中的`bookinfo-ratings-v2` 服务访问MongoDB负载。
 
