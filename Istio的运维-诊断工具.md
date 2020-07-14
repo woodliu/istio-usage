@@ -1,5 +1,7 @@
 # Istio的运维-诊断工具
 
+涵盖官方文档的[诊断工具](https://istio.io/docs/ops/diagnostic-tools/)章节
+
 [TOC]
 
 ## 使用istioctl命令行工具
@@ -263,7 +265,7 @@ zipkin                                                 -       -       -        
    LISTEN         0             128                       *:15020                    *:* 
    ```
 
-2. 从上述输出概要中可以看到每个sidecar都有一个绑定到 `0.0.0.0:15006`的listener，IP tables会将所有入站的Pod流量导入该listener；以及一个绑定到 `0.0.0.0:15001`的listener，IP tables会将所有出站流量导入该listener，该listener有一个字段useOrig`i`nalDst设置为true，表示会使用最佳匹配原始目的地的方式将请求分发到virtual listener，如果没有找到任何virtual listener，将会直接发送到连接目的地的`PassthroughCluster`。
+2. 从上述输出概要中可以看到每个sidecar都有一个绑定到 `0.0.0.0:15006`的listener，IP tables会将所有入站的Pod流量导入该listener；以及一个绑定到 `0.0.0.0:15001`的listener，IP tables会将所有出站流量导入该listener，该listener有一个字段`useOriginalDst`设置为true，表示会使用最佳匹配原始目的地的方式将请求分发到virtual listener，如果没有找到任何virtual listener，将会直接发送到连接目的地的`PassthroughCluster`。
 
    ```shell
    $ istioctl pc listener productpage-v1-85b9bf9cd7-d8hm8.default --port 15001 -o json

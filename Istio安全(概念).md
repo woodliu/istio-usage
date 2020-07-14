@@ -93,7 +93,7 @@ Istio通过客户端和服务器端的PEP实现服务到服务的通信，PEP作
 
 ##### 宽容模式
 
-isitl mutual TLS有一个宽容模式，它允许一个服务同时接收明文流量和TLS加密的流量。该特性极大提升了mutual TLS的使用体验。
+istio mutual TLS有一个宽容模式，它允许一个服务同时接收明文流量和TLS加密的流量。该特性极大提升了mutual TLS的使用体验。
 
 在很多非istio的客户端和非istio的服务端架构中，当计划将服务端迁移到启用mutual TLS的istio上时都会遇到问题。通常，操作人员不能同时给所有的客户端安装一个sidecar，或没有权限这么做。即使在所有的服务端安装istio sidecar后，操作人员仍然无法在不中断现有连接的情况下启用mutual TLS。
 
