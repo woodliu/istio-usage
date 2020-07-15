@@ -58,7 +58,7 @@ metadata:
   name: reviews
 spec:
   hosts:
-  - reviews #虚拟service，客户端请求中的目的地址。内部访问时与k8s service名称相同；外部访问内部时，与外              部客户端的目的地相同，内部访问外部时，与内部客户端的目的地相同
+  - reviews #虚拟service，客户端请求中的目的地址。内部访问时与k8s service名称相同；外部访问内部时，与外部客户端的目的地相同，内部访问外部时，与内部客户端的目的地相同
   http:
   - match:
     - headers:

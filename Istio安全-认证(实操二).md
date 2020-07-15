@@ -158,7 +158,7 @@ sleep.legacy to httpbin.legacy: 200
 
 #### 为单个负载启用mutual TLS
 
-为了给特定的负载设置对等认证策略，需要使用`selector`字段指定匹配到期望负载的标签。然而，Istio无法为(到达服务的)出站的mutual TLS流量聚合工作负载级别的策略(*可以理解为对等认证策略是设定在负载(如pod)上的，还需要destination rule设置到服务(DNS)的策略*)，需要配置destination rule管理该行为。
+为了给特定的负载设置对等认证策略，需要使用`selector`字段指定匹配到期望负载的标签。然而，Istio无法为(到达服务的)出站的mutual TLS流量聚合工作负载级别的策略(*可以理解为对等认证策略是匹配负载(如pod)的，还需要destination rule匹配服务(DNS)*)，需要配置destination rule管理该行为。
 
 例如，下面对等认证策略和destination rule为`httpbin.bar`负载启用了严格的mutual TLS。
 
@@ -254,4 +254,398 @@ EOF
 1. 对等认证策略中的端口值为容器的端口，而destination rule中的值为service的端口
 2. 仅当端口绑定到服务时才能使用`portLevelMtls`。其他情况下，istio会忽略该字段
 
-### 策略优先级
+#### 策略优先级
+
+指定负载的对等认证策略要优先于命名空间范围的策略。可以通过禁用`httpbin.foo`负载的mutual TLS来测试这种特性。注意，foo命名空间已经启用了命名空间范围的mutual TLS，从`sleep.legacy` 到`httpbin.foo`的请求会失败(见上文)。
+
+```shell
+$ cat <<EOF | kubectl apply -n foo -f -
+apiVersion: "security.istio.io/v1beta1"
+kind: "PeerAuthentication"
+metadata:
+  name: "overwrite-example"
+  namespace: "foo"
+spec:
+  selector:
+    matchLabels:
+      app: httpbin
+  mtls:
+    mode: DISABLE
+EOF
+```
+
+```shell
+$ cat <<EOF | kubectl apply -n foo -f -
+apiVersion: "networking.istio.io/v1alpha3"
+kind: "DestinationRule"
+metadata:
+  name: "overwrite-example"
+spec:
+  host: httpbin.foo.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: DISABLE
+EOF
+```
+
+重新从`sleep.legacy`发起请求，可以看到成功返回200，表明指定服务的策略要优先于指定命名空间的策略。
+
+```shell
+$ kubectl exec $(kubectl get pod -l app=sleep -n legacy -o jsonpath={.items..metadata.name}) -c sleep -n legacy -- curl http://httpbin.foo:8000/ip -s -o /dev/null -w "%{http_code}\n"
+200
+```
+
+此时`foo`命名空间中有2个对等认证策略。
+
+```shell
+$ oc get peerauthentications.security.istio.io
+NAME                AGE
+default             16h
+overwrite-example   106s
+```
+
+#### 卸载
+
+```shell
+$ kubectl delete peerauthentication default overwrite-example -n foo
+$ kubectl delete peerauthentication httpbin -n bar
+$ kubectl delete destinationrules overwrite-example -n foo
+$ kubectl delete destinationrules httpbin -n bar
+```
+
+### 终端用户认证
+
+为了试验该特性，需要一个有效的JWT。JWT必须与使用的JWKS终端相匹配。本节测试[JWT test](https://raw.githubusercontent.com/istio/istio/release-1.6/security/tools/jwt/samples/demo.jwt) 和[JWKS endpoint](https://raw.githubusercontent.com/istio/istio/release-1.6/security/tools/jwt/samples/jwks.json)。
+
+为了方便，通过`ingressgateway`暴露`httpbin.foo`。
+
+```shell
+$ kubectl apply -f - <<EOF
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: httpbin-gateway
+  namespace: foo
+spec:
+  selector:
+    istio: ingressgateway # use Istio default gateway implementation
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "*"
+EOF
+```
+
+```shell
+$ kubectl apply -f - <<EOF
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: httpbin
+  namespace: foo
+spec:
+  hosts:
+  - "*"
+  gateways:
+  - httpbin-gateway
+  http:
+  - route:
+    - destination:
+        port:
+          number: 8000
+        host: httpbin.foo.svc.cluster.local
+EOF
+```
+
+获取ingress IP
+
+```shell
+$ export INGRESS_HOST=$(kubectl -n istio-system get service istio-ingressgateway -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+```
+
+运行一个测试请求。*PS：官方文档好像有点[问题](https://github.com/istio/istio.io/issues/7730)，直接在ingressgateway pod中执行测试*
+
+```shell
+# curl 127.0.0.1:8080/headers  -s -o /dev/null -w "%{http_code}\n"
+200
+```
+
+为ingress gateway添加一个需要终端用户JWT的请求认证策略
+
+```shell
+$ kubectl apply -f - <<EOF
+apiVersion: "security.istio.io/v1beta1"
+kind: "RequestAuthentication"
+metadata:
+  name: "jwt-example"
+  namespace: istio-system
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  jwtRules:
+  - issuer: "testing@secure.istio.io"
+    jwksUri: "https://raw.githubusercontent.com/istio/istio/release-1.6/security/tools/jwt/samples/jwks.json"
+EOF
+```
+
+将该策略应用到负载(`ingressgateway`)上，选择的命名空间为`istio-system`。
+
+如果在认证首部提供了token，istio会使用[公钥集](https://raw.githubusercontent.com/istio/istio/release-1.6/security/tools/jwt/samples/jwks.json)进行认证，如果token无效，则请求会被拒绝。但是会接收不带token的请求。为了观察这种行为，发送不带token，带错误的token和带无效token的请求。
+
+```shell
+# curl 127.0.0.1:8080/headers -s -o /dev/null -w "%{http_code}\n"
+200
+```
+
+```shell
+# curl --header "Authorization: Bearer deadbeef" 127.0.0.1:8080/headers -s -o /dev/null -w "%{http_code}\n"
+401
+```
+
+```shell
+# curl --header "Authorization: Bearer $TOKEN" 127.0.0.1:8080/headers -s -o /dev/null -w "%{http_code}\n"
+200
+```
+
+为了观察JWT验证的其他方面，使用 [`gen-jwt.py`](https://github.com/istio/istio/tree/release-1.6/security/tools/jwt/samples/gen-jwt.py) 生成新的token来测试不同的issuer，audiences，expiry date等。该脚本可以从istio的库中下载：
+
+```shell
+$ wget https://raw.githubusercontent.com/istio/istio/release-1.6/security/tools/jwt/samples/gen-jwt.py
+$ chmod +x gen-jwt.py
+```
+
+此外还需要用到`key.pem`文件
+
+```shell
+$ wget https://raw.githubusercontent.com/istio/istio/release-1.6/security/tools/jwt/samples/key.pem
+```
+
+例如，一下命令会创建一个token，5s过期。可以看到istio认证请求一开始是成功的，5s后会被拒绝。
+
+```shell
+$ TOKEN=$(./gen-jwt.py ./key.pem --expire 5)
+$ for i in `seq 1 10`; do curl --header "Authorization: Bearer $TOKEN" $INGRESS_HOST/headers -s -o /dev/null -w "%{http_code}\n"; sleep 1; done
+200
+200
+200
+200
+200
+401
+401
+401
+401
+401
+```
+
+也可以给ingress gateway配置一个JWT策略。通常用于为绑定到网关的所有服务定义JWT策略，而不只为单个服务定义JWT策略。
+
+#### 请求有效的token
+
+为了拒绝不带有效token的请求，需要添加一个`DENY`字段来处理无请求主体的请求，如下的`notRequestPrincipals: ["*"]`。只有提供了有效的JWT token后，才会认为请求主体是有效的。下面规则会拒绝没有有效token的请求。
+
+```shell
+$ kubectl apply -f - <<EOF
+apiVersion: "security.istio.io/v1beta1"
+kind: "AuthorizationPolicy"
+metadata:
+  name: "frontend-ingress"
+  namespace: istio-system
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  action: DENY
+  rules:
+  - from:
+    - source:
+        notRequestPrincipals: ["*"]
+EOF
+```
+
+重新请求，可以发现此时不带token的请求返回了403错误码：
+
+```shell
+# curl 127.0.0.1:8080/headers  -s -o /dev/null -w "%{http_code}\n"
+403
+```
+
+#### 为每条路径请求有效的token
+
+要使用基于每个主机、路径或方法的token来优化授权，需要将授权策略更改为只对/headers生效。当授权规则生效时，对 `$INGRESS_HOST/headers`的请求会返回错误码403，而针对其他路径的请求则会成功，如`$INGRESS_HOST/ip`。
+
+```shell
+$ kubectl apply -f - <<EOF
+apiVersion: "security.istio.io/v1beta1"
+kind: "AuthorizationPolicy"
+metadata:
+  name: "frontend-ingress"
+  namespace: istio-system
+spec:
+  selector:
+    matchLabels:
+      istio: ingressgateway
+  action: DENY
+  rules:
+  - from:
+    - source:
+        notRequestPrincipals: ["*"]
+    to:
+    - operation:
+        paths: ["/headers"]
+EOF
+```
+
+```shell
+# curl 127.0.0.1:8080/headers  -s -o /dev/null -w "%{http_code}\n"
+403
+# curl 127.0.0.1:8080/ip -s -o /dev/null -w "%{http_code}\n"
+200
+```
+
+### 卸载
+
+移除认证策略
+
+```shell
+$ kubectl -n istio-system delete requestauthentication jwt-example
+$ kubectl -n istio-system delete authorizationpolicy frontend-ingress
+```
+
+移除pod
+
+```shell
+$ kubectl delete ns foo bar legacy
+```
+
+## Mutual TLS迁移
+
+本节展示如何保证负载迁移到istio后仅使用mutual TLS通信。
+
+当调用其它负载时，istio会自动配置负载sidecar使用mutual TLS。istio默认会使用`PERMISSIVE`模式配置目标负载。当启用`PERMISSIVE`模式时，服务可以同时接收明文和mutual TLS的流量。为了仅允许mutual TLS流量，需要将配置切换为`STRICT`模式。
+
+可以使用[Grafana dashboard](https://istio.io/latest/docs/tasks/observability/metrics/using-istio-dashboard/)校验哪些负载会发送明文流量到使用PERMISSIVE模式的负载。
+
+### 配置集群
+
+创建两个命名空间，`foo`和`bar`，部署带sidecar的[httpbin](https://github.com/istio/istio/tree/release-1.6/samples/httpbin)和[sleep](https://github.com/istio/istio/tree/release-1.6/samples/sleep) 
+
+```shell
+$ kubectl create ns foo
+$ kubectl apply -f <(istioctl kube-inject -f samples/httpbin/httpbin.yaml) -n foo
+$ kubectl apply -f <(istioctl kube-inject -f samples/sleep/sleep.yaml) -n foo
+$ kubectl create ns bar
+$ kubectl apply -f <(istioctl kube-inject -f samples/httpbin/httpbin.yaml) -n bar
+$ kubectl apply -f <(istioctl kube-inject -f samples/sleep/sleep.yaml) -n bar
+```
+
+创建另外一个命名空间`legacy`，并部署不带sidecar的sleep
+
+```shell
+$ kubectl create ns legacy
+$ kubectl apply -f samples/sleep/sleep.yaml -n legacy
+```
+
+从三个命名空间的sleep pod中发送请求到`httpbin.foo`，所有的请求都应该返回HTTP 200状态码。
+
+```shell
+$ for from in "foo" "bar" "legacy"; do for to in "foo" "bar"; do kubectl exec "$(kubectl get pod -l app=sleep -n ${from} -o jsonpath={.items..metadata.name})" -c sleep -n ${from} -- curl http://httpbin.${to}:8000/ip -s -o /dev/null -w "sleep.${from} to httpbin.${to}: %{http_code}\n"; done; done
+sleep.foo to httpbin.foo: 200
+sleep.foo to httpbin.bar: 200
+sleep.bar to httpbin.foo: 200
+sleep.bar to httpbin.bar: 200
+sleep.legacy to httpbin.foo: 200
+sleep.legacy to httpbin.bar: 200
+```
+
+保证没有认证策略或destination rules
+
+```shell
+$ kubectl get peerauthentication --all-namespaces | grep -v istio-system
+NAMESPACE      NAME                          AGE
+```
+
+```shell
+$ kubectl get destinationrule --all-namespaces
+No resources found.
+```
+
+### 按命名空间锁定mutual TLS
+
+在将所有的客户端迁移到istio并注入Envoy sidecar后，配置foo命名空间仅允许接收mutual TLS流量。
+
+```shell
+$ kubectl apply -n foo -f - <<EOF
+apiVersion: "security.istio.io/v1beta1"
+kind: "PeerAuthentication"
+metadata:
+  name: "default"
+spec:
+  mtls:
+    mode: STRICT
+EOF
+```
+
+此时从 `sleep.legacy` 到 `httpbin.foo` 的请求会失败：
+
+```shell
+$ for from in "foo" "bar" "legacy"; do for to in "foo" "bar"; do kubectl exec "$(kubectl get pod -l app=sleep -n ${from} -o jsonpath={.items..metadata.name})" -c sleep -n ${from} -- curl http://httpbin.${to}:8000/ip -s -o /dev/null -w "sleep.${from} to httpbin.${to}: %{http_code}\n"; done; done
+sleep.foo to httpbin.foo: 200
+sleep.foo to httpbin.bar: 200
+sleep.bar to httpbin.foo: 200
+sleep.bar to httpbin.bar: 200
+sleep.legacy to httpbin.foo: 000
+command terminated with exit code 56
+sleep.legacy to httpbin.bar: 200
+```
+
+如果在安装istio时启用了 `values.global.proxy.privileged=true`，则可以使用`tcpdump`校验流量是否加密。
+
+```shell
+$ kubectl exec -nfoo "$(kubectl get pod -nfoo -lapp=httpbin -ojsonpath={.items..metadata.name})" -c istio-proxy -it -- sudo tcpdump dst port 80  -A
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on eth0, link-type EN10MB (Ethernet), capture size 262144 bytes
+```
+
+如果无法将所有的服务迁移到istio，则需要使用`PERMiISSIVE`模式。但是如果使用了PERMISSIVE模式，则不会使用任何认证和授权，默认使用明文流量。推荐使用[istio认证](https://istio.io/latest/docs/tasks/security/authorization/authz-http/)为不同的路径配置不同的策略。
+
+### 为整个网格锁定mutual TLS
+
+```shell
+$ kubectl apply -n istio-system -f - <<EOF
+apiVersion: "security.istio.io/v1beta1"
+kind: "PeerAuthentication"
+metadata:
+  name: "default"
+spec:
+  mtls:
+    mode: STRICT
+EOF
+```
+
+现在 `foo` 和`bar`命名空间会强制使用mutual TLS流量，因此从`sleep.legacy`发出的所有请求都会失败。
+
+```shell
+$ for from in "foo" "bar" "legacy"; do for to in "foo" "bar"; do kubectl exec "$(kubectl get pod -l app=sleep -n ${from} -o jsonpath={.items..metadata.name})" -c sleep -n ${from} -- curl http://httpbin.${to}:8000/ip -s -o /dev/null -w "sleep.${from} to httpbin.${to}: %{http_code}\n"; done; done
+sleep.foo to httpbin.foo: 200
+sleep.foo to httpbin.bar: 200
+sleep.bar to httpbin.foo: 200
+sleep.bar to httpbin.bar: 200
+sleep.legacy to httpbin.foo: 000
+command terminated with exit code 56
+sleep.legacy to httpbin.bar: 000
+command terminated with exit code 56
+```
+
+### 卸载
+
+```shell
+$ kubectl delete peerauthentication --all-namespaces --all
+```
+
+```shell
+kubectl delete ns foo bar legacy
+```

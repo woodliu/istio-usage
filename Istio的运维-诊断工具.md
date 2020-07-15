@@ -66,6 +66,8 @@ $ istioctl proxy-config endpoints <pod-name> [flags]
 
 更多参见下一节[调试Envoy和istiod](https://istio.io/docs/ops/diagnostic-tools/proxy-cmd/)
 
+> istio的listener，route，cluster和endpoint与Envoy中的[概念](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/intro/terminology#:~:text=Listener%3A%20A%20listener%20is%20a,hosts%20that%20Envoy%20connects%20to.)类似。istio的listener给出了kubernetes中可以被下游客户端连接的命名网络地址(不含serviceEntry)，如pod:port，service:port等；route给出了仅通过RDS获取到的路由；cluster给出了Envoy可以连接的上游主机地址和端口(含serviceEntry)，通过服务发现获取；endpoint为cluster对应的后端地址。
+
 ## 调试Envoy和istiod
 
 istio提供了两个非常有用的命令来诊断流量管理配置问题：[proxy-status](https://istio.io/docs/reference/commands/istioctl/#istioctl-proxy-status) 和[proxy-config](https://istio.io/docs/reference/commands/istioctl/#istioctl-proxy-config)。`proxy-status`可以获取网格的概述并确定导致问题的代理。`proxy-config`可以检查Envoy配置并诊断该问题。
@@ -473,7 +475,7 @@ zipkin                                                 -       -       -        
    ]
    ```
 
-6. 使用`proxy-config endpoint`命令查看本集群中当前可用的后端
+6. 使用`proxy-config endpoint`命令查看本集群中当前可用的后端，也可以直接指定端口查看`--port`
 
    ```shell
    $ istioctl pc endpoint productpage-v1-85b9bf9cd7-d8hm8.default --cluster "outbound|9080||reviews.default.svc.cluster.local"
@@ -490,7 +492,7 @@ zipkin                                                 -       -       -        
 到目前为止已经查看了istiod的大部分配置，然而，Envoy需要一些如哪里可以发现istiod的bootstrap配置，使用如下方式查看：
 
 ```shell
-$  istioctl proxy-config bootstrap -n istio-system istio-ingressgateway-569669bb67-dsd5h.istio-system
+$ istioctl proxy-config bootstrap -n istio-system istio-ingressgateway-569669bb67-dsd5h.istio-system
 {
     "bootstrap": {
         "node": {
