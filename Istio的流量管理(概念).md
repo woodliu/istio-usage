@@ -6,9 +6,9 @@
 
 ### 概述
 
-istio的流量路由规则可以简单地控制不同服务间的流量以及API调用。Istio在服务层面提供了断路器，超时，重试等功能，通过这些功能可以简单地实现A/B测试，金丝雀发布，基于百分比的流量分割等，此外还提供了开箱即用的故障恢复功能，用于增加应用的健壮性，以应对服务故障或网络故障。
+istio的流量路由规则可以简单地控制不同服务间的流量以及API调用。Istio在服务层面提供了断路器，超时，重试等功能，通过这些功能可以实现A/B测试，金丝雀发布，基于百分比的流量分割等，此外还提供了开箱即用的故障恢复功能，用于增加应用的健壮性，以应对服务故障或网络故障。
 
-istio的流量管理依赖Envoy代理，该代理作为sidecar与服务容器部署在同一个pod内，服务发送或接收的流量都会经过Envoy，这样就可以在不改变服务的情况下实现网格中的流量管理。
+istio的流量管理模型依赖Envoy代理，该代理作为sidecar与服务容器部署在同一个pod内，服务发送或接收的流量都会经过Envoy，这样就可以在不改变服务的情况下实现网格中的流量管理。
 
 为了直接管理网格中的流量，istio需要了解所有的endpoints，以及哪些service对应哪些endpoints，为了将这些信息推送到它的服务注册表(service reistry)中，istio需要连接到一个服务发现系统，例如，当istio安装到一个kubernetes集群时，istio会自动探测集群的services和endpoints。
 
@@ -16,9 +16,9 @@ istio的流量管理依赖Envoy代理，该代理作为sidecar与服务容器部
 
 使用服务注册表，Envoy代理可以将流量定向到相关的服务中。大多数基于微服务的应用会有多个实例，且每个实例处理一部分服务流量，这些实例有时也被称为负载均衡池。默认情况下，Envoy代理会使用轮询模式，通过服务的负载均衡池分发流量，此时会按照顺序将请求发送到负载均衡池中的各个成员。
 
-虽然istio的基本服务发现和负载均衡提供了一个可运行的服务网格，但istio的功能远非如此。在大多数场景下，用户可能想更好地控制网格的流量，如在A/B测试中按照百分比将流量导入一个新版本的服务，或对某些服务实例应用不同的负载均衡策略，对进出网格的流量应用特殊的规则，或将网格的外部依赖项添加到服务注册表中等。这些功能都可以通过istio的流量管理API，在istio中添加流量配置来实现。
+虽然istio的基本服务发现和负载均衡提供了一个可运行的服务网格，但istio的功能远非如此。在大多数场景下，用户可能想更好地控制网格的流量，如在A/B测试中，按照百分比将流量导入一个新版本的服务，或对某些服务实例应用不同的负载均衡策略，对进出网格的流量应用特殊的规则，或将网格的外部依赖项添加到服务注册表中等。这些功能都可以通过istio的流量管理API，在istio中添加流量配置来实现。
 
-跟其他istio配置一样，流量管理API也使用CRD指定。下面介绍各个流量管理API资源，以及这些API的功能。API资源包括：
+跟其他istio配置相同，流量管理的API也使用CRD进行配置。下面介绍各个流量管理API的资源，以及这些API的功能。API资源包括：
 
 - [Virtual services](https://istio.io/docs/concepts/traffic-management/#virtual-services)
 - [Destination rules](https://istio.io/docs/concepts/traffic-management/#destination-rules)
@@ -28,24 +28,24 @@ istio的流量管理依赖Envoy代理，该代理作为sidecar与服务容器部
 
 ### [Virtual services](https://istio.io/docs/reference/config/networking/virtual-service/#VirtualService)
 
-[Virtual services](https://istio.io/docs/reference/config/networking/virtual-service/#VirtualService)和[destination rules](https://istio.io/docs/concepts/traffic-management/#destination-rules)是istio流量路由功能的核心部分。virtual service规定了(在用户平台提供的基本连接和服务发现的基础上)如何将一个请求路由到一个istio的服务网格中。每个virtual service包含一个按顺序处理的路由规则集，istio会通过这些规则将每个匹配virtual service的请求分发到网格中一个特定的目的地。根据需求可以使用多个virtual service或不使用virtual service。
+[Virtual services](https://istio.io/docs/reference/config/networking/virtual-service/#VirtualService)和[destination rules](https://istio.io/docs/concepts/traffic-management/#destination-rules)是istio流量路由功能的核心部分。virtual service允许(在用户平台提供的基本连接和服务发现的基础上)配置如何将一个请求路由到一个istio服务网格中的服务。每个virtual service都包含一个按顺序处理的路由规则集，istio会通过这些规则将每个匹配virtual service的请求分发到网格中某个特定的目的地。根据需求可以使用多个或不使用virtual service。
 
 #### 为什么使用virtual service
 
 virtual service将客户端请求与目标负载进行解耦，通过这种方式，大大提升了istio流量管理的灵活性，并增强了流量管理的功能。virtual service还提供了大量方式来指定不同的流量路由规则，用于将流量发送到目标负载中。
 
-如果没有virtual service，Envoy会像前面介绍的那样，在所有服务实例中采用轮询负载均衡方式进行流量分发。用户需要了解具体的负载才能做进一步动作。例如，某些负载可能代表不同版本的服务，这样就可以用于A/B测试，将不同百分比的流量分发到不同版本的服务中，或直接将流量分发到特定的服务实例。
+如果没有virtual service，Envoy会像前面介绍的那样，在所有服务实例中采用轮询负载均衡方式进行流量分发。使用virtual service后，用户可以根据具体的负载做进一步动作。例如，某些负载可能代表不同版本的服务，这样就可以用于A/B测试，将不同百分比的流量分发到不同版本的服务中，或直接将流量分发到特定的服务实例。
 
-使用virtual service后，就可以为一个或多个主机名指定流量行为，使用virtual service中的路由规则告诉Envoy如何将virtual service的流量发送到合适的目的地。路由目的地可能对应相同版本的服务或完全不同版本的服务。
+使用virtual service后，就可以为一个或多个主机名指定流量行为，使用virtual service中的路由规则告诉Envoy如何将virtual service的流量发送到合适的目的地。路由目的地可能对应相同或不同版本的服务。
 
-一个典型的场景是将流量发送到不同版本的服务。客户端将virtual service视为一个独立的实体，并将请求发送到virtual service，Envoy会根据virtual service中的规则将流量路由到不同的版本：例如，"20%的调用分发到新版本"，或"将来自某些用户的调用分发到版本2"。通过这种方式可以实现金丝雀发布。流量路由完全独立于实例的deployment，这意味着新版本的服务实例的数量可以根据流量负载扩大或缩小，而不必参考流量路由。相比之下，像Kubernetes这样的容器编排平台只支持基于实例缩放的流量分布，这样很快就会变得复杂。
+一个典型的场景是将流量发送到不同版本的服务。客户端将virtual service视为一个独立的实体，并将请求发送到virtual service，Envoy会根据virtual service中的规则将流量路由到不同的版本：例如，"20%的调用分发到新版本"，或"将来自某些用户的调用分发到版本2"。通过这种方式可以实现金丝雀发布。流量路由完全独立于实例的部署，这意味着新版本的服务实例的数量可以根据流量负载扩大或缩小，而不必参考流量路由。相比之下，像Kubernetes这样的容器编排平台只支持基于实例缩放的流量分布，这样情况很快就会变得复杂。
 
 Virtual services允许：
 
-- 通过一个virtual service处理多个应用服务。如果网格使用了kubernetes，可以通过一个virtual service处理特定命名空间下的所有服务。通过将一个virtual service映射到多个"真实的"服务，可以方便将单一应用程序转换为由不同的微服务组成的复合服务，而无需服务的使用者去适应这种转变(*可以看作是kubernetes service之上的service*)。
+- 通过一个virtual service处理多个应用服务。如果网格使用了kubernetes，可以通过一个virtual service处理特定命名空间下的所有服务。通过将一个virtual service映射到多个"真实的"服务，可以方便地将单一应用程序转换为由不同的微服务组成的复合服务，而无需服务的使用者去适应这种转变(*可以看作是kubernetes service之上的service*)，例如可以将"到URI `monolith.com`的调用分发给 `microservice A`"。
 - 将配置的流量规则与[gataways](https://istio.io/docs/concepts/traffic-management/#gateways)进行结合来控制ingress和egress的流量。
 
-在一些场景下还需要配置destination rule来使用这些特性，此时需要指定服务子集(`subset`)。在一个独立的对象中指定服务子集和其他destination指定的策略(*如负载均衡*)，可以在不同的virtual service中重用这些配置。
+在一些场景下还需要配置destination rule来使用这些特性，此时需要指定服务子集(`subset`)。在一个独立的对象中指定服务子集和其他destination指定的策略(*如负载均衡*)，可以在不同的virtual service之间重用这些配置。
 
 #### Virtual services举例
 
@@ -58,7 +58,7 @@ metadata:
   name: reviews
 spec:
   hosts:
-  - reviews #虚拟service，客户端请求中的目的地址。内部访问时与k8s service名称相同；外部访问内部时，与外部客户端的目的地相同，内部访问外部时，与内部客户端的目的地相同
+  - reviews #虚拟service，客户端请求中的目的地址。内部访问时与k8s service名称相同；外部访问内部时，与外部客户端的目的地相同，内部访问外部时，与内部客户端的目的地相同。总之就是客户端可达的目的地，istio对对拦截的请求进行解析
   http:
   - match:
     - headers:
@@ -76,24 +76,24 @@ spec:
 
 ##### hosts字段
 
-`hosts`字段列出了virtual service的主机，即用户可寻址的目标或路由规则应用的目标。**它是客户端向服务发送请求时使用的一个或多个地址**。通过该字段提供的地址访问virtual service，进而访问后端服务。在集群内部(网格内)使用时通常与kubernetes的Service同命；当需要在集群外部(网格外)访问时，该字段为gateway请求的请求的地址，即与gateway的`hosts`字段相同，也可采用DNS的模糊匹配。
+`hosts`字段列出了virtual service的主机，即用户可寻址的目标或路由规则应用的目标。**它是客户端向服务发送请求时使用的一个或多个地址**，通过该字段提供的地址访问virtual service，进而访问后端服务。在集群内部(网格内)使用时通常与kubernetes的Service同命；当需要在集群外部(网格外)访问时，该字段为gateway请求的地址，即与gateway的`hosts`字段相同，也可采用DNS的模糊匹配。
 
 ```yaml
 hosts:
 - reviews
 ```
 
-virtual service的主机名可以是IP地址、DNS名称，也可以是短名称(例如Kubernetes服务短名称)，该名称会被隐式或显式解析为全限定域名（FQDN），具体取决于istio依赖的平台。可以使用前缀通配符（“*”）为所有匹配的服务创建一组路由规则。virtual service的`hosts`不一定作为Istio服务注册表的一部分，它们只是**虚拟目的地**，允许用户为网格无法路由到的虚拟主机建立流量模型。
+virtual service的主机名可以是IP地址、DNS名称，也可以是短名称(例如Kubernetes服务短名称)，该名称会被隐式或显式解析为全限定域名（FQDN），具体取决于istio依赖的平台。可以使用前缀通配符（“*”）为所有匹配的服务创建一组路由规则。virtual service的`hosts`不一定是Istio服务注册表的一部分，它们只是**虚拟目的地**，允许用户为网格无法路由到的虚拟主机建立流量模型。
 
 > virtual service的hosts短域名在解析为完整的域名时，补齐的namespace是VirtualService所在的命名空间，而非Service所在的命名空间。如上例的hosts会被解析为：reviews.default.svc.cluster.local。
 
 #### 路由规则
 
-`http`部分包含了virtual service的路由规则，描述了匹配条件，以及将HTTP/1.1，HTTP2和gRPC流量发送到`hosts`字段指定的目的地的相关动作。一个路由规则包含流量的目的地以及0个或多个条件，具体取决于实际的场景。
+`http`部分包含了virtual service的路由规则，描述了匹配条件，以及将HTTP/1.1，HTTP2和gRPC流量路由到`hosts`字段指定的目的地的相关动作(可以使用`tcp`和`tls`字段配置TCP路由规则和非终结TLS流量)。一个路由规则包含流量的目的地以及0个或多个条件，具体取决于实际的场景。
 
 ##### match
 
-第一个路由规则的例子如下，它有一个以`match`字段开头的条件，这种情况下希望路由来自用户"jason"的所有请求，使用`headers`, `end-user`和`exact` 字段来挑选合适的请求。
+第一个路由规则的例子如下，它有一个以`match`字段开头的条件，这种情况下希望路由来自用户"jason"的所有请求，使用`headers`, `end-user`和`exact` 字段来选择合适的请求。
 
 ```yaml
 - match:
@@ -104,7 +104,7 @@ virtual service的主机名可以是IP地址、DNS名称，也可以是短名称
 
 ##### destination
 
-路由部分的`destination`字段指定了匹配条件的流量的实际地址。与virtual service的主机不同，**该`host`必须是存在于istio的服务注册表(如kubernetes services，consul services等)中的真实目的地或由[ServiceEntries](https://istio.io/docs/reference/config/networking/service-entry/#ServiceEntry)声明的hosts**，否则Envoy不知道应该将流量发送到哪里。它可以是一个带代理的网格服务或使用`service entry`添加的非网格服务。在kubernetes作为平台的情况下，`host`表示名为kubernetes的service名称：
+路由的`destination`字段指定了匹配条件的流量的实际地址。与virtual service的主机不同，**该`host`必须是存在于istio的服务注册表(如kubernetes services，consul services等)中的真实目的地或由[ServiceEntries](https://istio.io/docs/reference/config/networking/service-entry/#ServiceEntry)声明的hosts**，否则Envoy不知道应该将流量发送到哪里。它可以是一个带代理的网格服务或使用`service entry`添加的非网格服务。在kubernetes作为平台的情况下，`host`表示名为kubernetes的service名称：
 
 ```yaml
 route:
@@ -113,13 +113,13 @@ route:
     subset: v2
 ```
 
-注意在本章的其他例子中使用kubernetes的短名称作为`destination`的主机。当使用这种规则时，istio会根据包含路由规则的virtual service的命名空间添加域后缀，在这些例子使用短名称意味着可以在任意命名空间中应用这些规则。
+注意在本章的其他例子中使用kubernetes的短名称作为`destination`的主机。当使用这种规则时，istio会根据包含路由规则的virtual service所在的命名空间添加域后缀，使用短名称意味着可以在任意命名空间中应用这些规则(仅需简单拷贝即可)。
 
 Istio根据包含路由规则的虚拟服务的命名空间添加域后缀来获取主机的完整的名称。
 
 > 只有当destination主机和virtual service在相同的kubernetes命名空间下面才会正常工作。由于kubernetes的短名称可能会导致误解，因此建议在生成环境中使用完整的主机名。
 
-`destination` 部分也指定了期望请求的kubernetes的服务子集，上面例子中定义了名为v2的子集。
+`destination` 字段也指定了期望请求的kubernetes的服务子集，上面例子中定义了名为v2的子集。
 
 ##### 路由规则优先级
 
@@ -136,7 +136,7 @@ Istio根据包含路由规则的虚拟服务的命名空间添加域后缀来获
 
 ##### 路由规则的更多介绍
 
-正如上面描述的，可以通过设置路由规则将特定的流量分发到特定的目的地。例如，以下virtual service可以让用户将流量分发到两个独立的service(reviews和ratings)上，就像这两个service是virtual service http://bookinfo.com/的一部分(*即virtual service作为kubernetes的service的service，可以方便前者进行扩展*)。virtual service的路由匹配规则基于请求的URLs，然后将请求分发到正确的service上。
+正如上面描述的，可以通过设置路由规则将特定的流量分发到特定的目的地。例如，以下virtual service可以让用户将流量分发到两个独立的services(reviews和ratings)上，就像这两个service是virtual service http://bookinfo.com/的一部分。virtual service的路由匹配规则基于请求的URLs，然后将请求分发到正确的service上。
 
 ```yaml
 apiVersion: networking.istio.io/v1alpha3
@@ -187,13 +187,13 @@ spec:
 
 - 追加或移除首部
 - 重写URL
-- 对本目的地的调用设置重试策略
+- 对本目的地的调用设置[重试](https://istio.io/latest/docs/concepts/traffic-management/#retries)策略
 
 更多参见[HTTPRoute reference](https://istio.io/docs/reference/config/networking/virtual-service/#HTTPRoute)
 
 ### [Destination Rule](https://istio.io/docs/reference/config/networking/destination-rule/)
 
-destination rule是istio流量路由功能的重要组成部分。一个virtual service可以看作是如何将流量分发的给定的目的地，然后调用destination rule来配置分发到该目的地的流量。destination rule在virtual service的路由规则之后起作用(*即在virtual service的math->route-destination之后起作用，此时流量已经分发到真实的service上*)，应用于真实的目的地。
+destination rule是istio流量路由功能的重要组成部分。一个virtual service可以看作是如何将流量分发给特定的目的地，然后调用destination rule来配置分发到该目的地的流量。destination rule在virtual service的路由规则之后起作用(*即在virtual service的math->route-destination之后起作用，此时流量已经分发到真实的service上*)，应用于真实的目的地。
 
 特别地，可以使用destination rule来指定命名的服务子集，例如根据版本对服务的实例进行分组，然后通过virtual service的路由规则中的服务子集将控制流量分发到不同服务的实例中。
 
@@ -211,7 +211,7 @@ istio默认会使用轮询策略，此外istio也支持如下负载均衡模型�
 
 #### Destination rule例子
 
-下面的Destination rule使用不同的负载均衡策略为my-svc目的服务配置了3个不同的子集(`subset`)。
+下面的Destination rule使用不同的负载均衡策略为`my-svc`目的服务配置了3个不同的子集(`subset`)。
 
 ```yaml
 apiVersion: networking.istio.io/v1alpha3
@@ -240,17 +240,17 @@ spec:
 
 每个子集由一个或多个`labels`定义，对应kubernetes中的对象(如pod)的key/value对。这些标签定义在kubernetes服务的deployment的`metadata` 中，用于标识不同的版本。
 
-除了定义子集外，destination rule还定义了该目的地中所有子集的默认流量策略，以及仅覆盖该子集的特定策略。默认的策略定义在`subset`字段之上，为`v1`和`v3`子集设置了随机负载均衡策略，在`v2`策略中使用了轮询负载均衡。
+除了定义子集外，destination rule还定义了该目的地中所有子集的默认流量策略，以及仅覆盖该子集的特定策略。默认的策略定义在`subset`字段上面，为`v1`和`v3`子集设置了随机负载均衡策略，在`v2`策略中使用了轮询负载均衡。
 
 ### [Gateway](https://istio.io/docs/reference/config/networking/gateway/#Gateway) 
 
-gateway用于管理**进出**网格的流量，指定可以进入或离开网格的流量(`Gateway`既可以支持ingress流量，也可以支持egress流量)。gateway配置应用于网格边缘的独立的Envoy代理上，而不是服务负载的Envoy代理上。
+gateway用于管理**进出**网格的流量，指定可以进入或离开网格的流量(`Gateway`既可以支持ingress流量，也可以支持egress流量)。gateway的配置应用于网格边缘的独立的Envoy代理上，而不是服务负载的Envoy代理上。
 
-与其他控制进入系统的流量的机制(如kubernetes ingress API)不同，istio gateway允许利用istio的流量路由的强大功能和灵活性。istio的gateway资源仅允许配置4-6层的负载属性，如暴露的端口，TLS配置等等，但结合istio的virtual service，就可以像管理istio网格中的其他数据面流量一样管理gateway的流量。
+与其他控制进入系统的流量的机制(如kubernetes ingress API)不同，istio gateway允许利用istio的流量路由的强大功能和灵活性。istio的gateway资源允许配置4-6层的负载属性，如暴露的端口，TLS配置等等，但结合istio的virtual service，就可以像管理istio网格中的其他数据面流量一样管理gateway的流量。
 
-gateway主要用于管理ingress流量，但也可以配置egress gateway。通过egress gateway可以配置流量离开网格的特定节点，限制哪些服务可以访问外部网络，或通过[egress安全控制](https://istio.io/blog/2019/egress-traffic-control-in-istio-part-1/)来提高网格的安全性。gateway可以用于配置为一个纯粹的内部代理。
+gateway主要用于管理ingress流量，但也可以配置egress gateway。通过egress gateway可以配置流量离开网格的特定节点，限制哪些服务可以访问外部网络，或通过[egress安全控制](https://istio.io/blog/2019/egress-traffic-control-in-istio-part-1/)来提高网格的安全性。例如，可以将gateway配置为一个纯粹的内部代理。
 
-istio(通过`istio-ingressgateway`和`istio-egressgateway`参数)提供了一些预配置的gateway代理，`default` profile下仅会部署ingress gateway。gateway可以通过部署文件进行部署，也可以单独部署。
+istio(通过`istio-ingressgateway`和`istio-egressgateway`参数)提供了一些预配置的gateway代理，`default` profile下仅会部署`ingress` gateway。gateway可以通过部署文件进行部署，也可以单独部署。
 
 下面是`default` profile默认安装的ingress
 
@@ -292,7 +292,7 @@ spec:
 
 上述gateway配置允许来自`ext-host.example.com` 流量进入网格的443端口，但没有指定该流量的路由。(*此时流量只能进入网格，但没有指定处理该流量的服务，因此需要与virtual service进行绑定*)
 
-为了为gateway指定路由，需要通过virtual service的`gateway`字段，将gateway绑定到一个virtual service上，将来自`ext-host.example.com`流量引入一个`VirtualService`，`hosts`可以是通配符，表示引入匹配到的流量。
+为了给gateway指定路由，需要通过virtual service的`gateway`字段，将gateway绑定到一个virtual service上，将来自`ext-host.example.com`流量引入一个`VirtualService`，`hosts`可以是通配符，表示引入匹配到的流量。
 
 ```yaml
 apiVersion: networking.istio.io/v1alpha3
@@ -347,7 +347,7 @@ kind: DestinationRule
 metadata:
   name: ext-res-dr
 spec:
-  host: ext-svc.example.com #此处的host为serviceEntry注册到注册中心的表项
+  host: ext-svc.example.com #此处的host为serviceEntry注册到注册中心的服务
   trafficPolicy:
     tls:
       mode: MUTUAL
@@ -365,7 +365,7 @@ spec:
 
 在大型应用中，如果在每个服务都经过sidecar代理，可能会因为内存过高而影响网格的性能，这种情况下，可能需要限制sidecar的可达性。
 
-可以将sidecar配置到某个特定的命名空间中，或通过`workloadSelector`选择特定的负载。例如，下面的sidecar配置将bookinfo命名空间中的所有服务配置为，仅访问在同一命名空间和Istio控制平面中的服务。
+可以将sidecar配置到某个特定的命名空间中，或通过`workloadSelector`选择特定的负载。例如，下面的sidecar配置将bookinfo命名空间中的所有服务配置为：仅访问在同一命名空间和Istio控制平面的服务。
 
 *sidecar配置仅能影响到该配置所在的命名空间*
 
@@ -388,7 +388,7 @@ spec:
 
 #### 超时
 
-timeout是Envoy代理在等待给定服务响应前的时间，保证不会无限等待服务的响应，最后返回成功会超时后返回失败。默认的HTTP请求超时时间为15s，即如果服务无法在15秒内响应，则调用失败。
+timeout是Envoy代理在等待给定服务响应前的时间，保证不会无限等待服务的响应，最后返回成功或超时后返回失败。istio默认禁用HTTP请求的Envoy超时。
 
 对于一些应用和服务，istio的默认超时可能不大合适。例如，超时过长可能会在有失败的服务下出现大量延时，而超时过短可能会导致不必要的调用失败(如调用链比较长)。为了优化超时设置，istio允许使用virtual service动态调整每个服务的超时，而无需修改服务代码。下面virtual service将`ratings` 服务的`v1`服务子集的超时设置为10s。
 
@@ -410,7 +410,7 @@ spec:
 
 #### 重试
 
-与timeout类似，可以在virtual service中设置单个服务的重试配置，默认情况下HTTP请求在返回错误前会重试2次。下面例子中配置的最大重试次数为3，每次超时时间为2s。
+与timeout类似，可以在virtual service中设置单个服务的重试配置。下面例子中配置的最大重试次数为3，每次超时时间为2s。
 
 ```yaml
 apiVersion: networking.istio.io/v1alpha3
@@ -432,7 +432,7 @@ spec:
 
 #### [断路器](https://istio.io/docs/tasks/traffic-management/circuit-breaking/)
 
-断路器是istio提供的另一种构建弹性微服务的机制。在断路器中，可以设置对服务中单个主机的呼叫限制，如限制到一台主机的并发连接数，或限制到一台主机的调用失败的次数，一旦达到限制值，断路器或发出告警并停止连接这台主机。
+断路器是istio提供的另一种构建弹性微服务的机制。在断路器中，可以设置对服务中单个主机的调用限制，如限制到一台主机的并发连接数，或限制到一台主机的调用失败的次数，一旦达到限制值，断路器或发出告警并停止连接这台主机。
 
 由于断路器会作用到负载均衡池中的真实网格目标，可以在`destination rules`中配置断路器阈值，该设置作用到服务中的每个主机。下面例子限制了reviews服务负载的v1服务子集的最大并发连接数为100。
 
@@ -494,7 +494,7 @@ istio的故障恢复功能对应用来说是完全透明的。一个应用无法
 
 ### 总结
 
-- istio的`VirtualService`主要进行流量路由和故障注入，请求超时等；`DestinationRule`用于对路由的流量进行更细化的配置；`ServiceEntry`用于注册外部服务。如果不需要`VirtualService`提供的功能，[DestinationRule](https://istio.io/docs/tasks/traffic-management/egress/egress-gateway/#apply-kubernetes-network-policies)和[ServiceEntry](https://istio.io/docs/tasks/traffic-management/egress/egress-gateway/#egress-gateway-for-http-traffic)都可以单独使用，将流量分发到注册的`host`即可
+- istio的`VirtualService`主要进行流量路由和故障注入，请求超时等；`DestinationRule`用于对路由的流量进行更细化的配置；`ServiceEntry`用于注册外部服务。如果不需要`VirtualService`提供的功能，[DestinationRule](https://istio.io/docs/tasks/traffic-management/egress/egress-gateway/#apply-kubernetes-network-policies)和[ServiceEntry](https://istio.io/docs/tasks/traffic-management/egress/egress-gateway/#egress-gateway-for-http-traffic)都可以**单独**使用，将流量分发到注册的`host`即可。
 - `VirtualService`+`DestinationRule`可以进行流量路由，并将流量分发到注册中心中存在的service或`ServiceEntry`声明的hosts上
 - `VirtualService`+`DestinationRule`+`Gateway`可以将外部请求的流量引入网格内，外部流量会通过`Gateway`指定的ingress Pod进入网格，然后使用`VirtualService`+`DestinationRule`进行流量控制
 - `VirtualService`+`DestinationRule`+`ServiceEntry`可以将网格内部请求的流量通过sidecar代理转发到网格外部
