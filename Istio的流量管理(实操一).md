@@ -21,7 +21,7 @@
 - v2版本会调用 `ratings` 服务,并按照1到5的黑色星展示排名
 - v2版本会调用 `ratings` 服务,并按照1到5的红色星展示排名
 
-![](./images/bookinfo_application.png)
+![](https://img2020.cnblogs.com/blog/1334952/202005/1334952-20200514144110805-1829608000.png)
 
 ### 部署
 
@@ -42,7 +42,7 @@ Bookinfo应用部署在`default`命名空间下，使用自动注入sidecar的�
   $ kubectl label namespace default istio-injection=enabled
   ```
 
-- 切换在`default`命名空间下，部署Bookinfo应用：
+- 切换到`default`命名空间下，部署Bookinfo应用：
 
   ```shell
   $ kubectl apply -f samples/bookinfo/platform/kube/bookinfo.yaml
@@ -230,15 +230,15 @@ $ samples/bookinfo/platform/kube/cleanup.sh
 
 - V1版本：
 
-  ![](./images/Request Routing1.png)
+  ![](https://img2020.cnblogs.com/blog/1334952/202005/1334952-20200514144250034-1717671110.png)
 
 - V2版本：
 
-  ![](./images/Request Routing2.png)
+  ![](https://img2020.cnblogs.com/blog/1334952/202005/1334952-20200514144307553-2078293347.png)
 
 - V3版本：
 
-  ![](./images/Request Routing3.png)
+  ![](https://img2020.cnblogs.com/blog/1334952/202005/1334952-20200514144325867-1847923008.png)
 
 本次展示如何将请求仅分发到某一个`reviews`服务上。
 

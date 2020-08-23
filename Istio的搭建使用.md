@@ -6,7 +6,7 @@
 
 ### 安装Istio
 
-本次安装的Istio版本为1.6.0，环境为openshift 4.3
+本次安装的Istio版本为1.7.0，环境为openshift 4.3
 
 注：不建议使用openshift 1.11(即kubernetes 3.11)安装istio，可能会出现如下兼容性问题，参见此[issue](https://github.com/jetstack/cert-manager/issues/2200)
 
@@ -19,16 +19,16 @@ must only have "properties", "required" or "description" at the root if the stat
 istio的安装涉及到两个文件：profile和manifest。前者用于控制组件的安装和组件的参数，profile配置文件所在的目录为`install/kubernetes/operator/profiles`；后者为安装所使用的yaml文件，如service，deployment等，会用到profile提供的参数，manifest配置文件所在的目录为`install/kubernetes/operator/charts`。因此可以通过两种方式安装istio，一种是通过profile进行安装，istio默认使用这种方式，如：
 
 ```shell
-$ istioctl manifest apply --set profile=default
+$ istioctl install --set profile=demo
 ```
 
-第二种是通过导出的manifest进行安装，如：
+第二种是通过导出的manifest进行安装(不推荐，见下)，如：
 
 ```shell
 $ kubectl apply -f $HOME/generated-manifest.yaml
 ```
 
-参考不同平台可以参考对应的[SetUp](https://istio.io/docs/setup/platform-setup/)。在openshift下面部署istio需要注意[版本](https://istio.io/docs/setup/platform-setup/openshift/)：
+参考不同平台可以参考对应的[SetUp](https://istio.io/latest/docs/setup/platform-setup/)。在openshift下面部署istio需要注意[版本](https://istio.io/docs/setup/platform-setup/openshift/)：
 
 > OpenShift 4.1 and above use `nftables`, which is incompatible with the Istio `proxy-init` container. Make sure to use [CNI](https://istio.io/docs/setup/additional-setup/cni/) instead.
 
@@ -107,24 +107,23 @@ EOF
 ```
 
 ```shell
-$ istioctl manifest apply -f cni-annotations.yaml
+$ istioctl manifest install -f cni-annotations.yaml
 ```
 
 安装结果如下：
 
 ```shell
-# oc get pod
+# oc get pod -n istio-system
 NAME                                    READY   STATUS    RESTARTS   AGE
-istio-ingressgateway-64f6f9d5c6-lwcp8   1/1     Running   0          41m
-istiod-5bb879d86c-6ttml                 1/1     Running   0          42m
-prometheus-77b9c64b9c-r2pld             2/2     Running   0          41m
+istio-ingressgateway-746548c687-wjc6j   1/1     Running   0          95s
+istiod-6c5f6f55ff-htrss                 1/1     Running   0          2m31s
 # oc get pod -nkube-system
 NAME                   READY   STATUS    RESTARTS   AGE
-istio-cni-node-2xzl8   2/2     Running   0          41m
-istio-cni-node-4nb6k   2/2     Running   0          41m
-istio-cni-node-7j5ck   2/2     Running   0          41m
-istio-cni-node-f9bnf   2/2     Running   0          41m
-istio-cni-node-lp7v6   2/2     Running   0          41m
+istio-cni-node-44tx7   2/2     Running   0          112s
+istio-cni-node-92qqk   2/2     Running   0          112s
+istio-cni-node-gdg6g   2/2     Running   0          112s
+istio-cni-node-pwtjh   2/2     Running   0          112s
+istio-cni-node-z5p2z   2/2     Running   0          112s
 ```
 
 为ingress gateway暴露router：
@@ -198,26 +197,30 @@ $ istioctl manifest generate -f cni-annotations.yaml | kubectl delete -f -
 
 #### [标准安装istio](https://istio.io/docs/setup/install/istioctl/)
 
-`istioctl` 使用内置的charts生成manifest，这些charts位于目录`install/kubernetes/operator/charts`。
+`istioctl` 使用内置的charts生成manifest，这些charts位于目录`manifests/charts`。
 
 ```shell
 # ll
-total 36
-drwxr-xr-x. 4 root root 4096 Apr 21 06:51 base
-drwxr-xr-x. 4 root root 4096 Apr 21 06:51 gateways
-drwxr-xr-x. 3 root root 4096 Apr 21 06:51 istio-cni
-drwxr-xr-x. 5 root root 4096 Apr 21 06:51 istio-control
-drwxr-xr-x. 3 root root 4096 Apr 21 06:51 istiocoredns
-drwxr-xr-x. 3 root root 4096 Apr 21 06:51 istio-operator
-drwxr-xr-x. 3 root root 4096 Apr 21 06:51 istio-policy
-drwxr-xr-x. 8 root root 4096 Apr 21 06:51 istio-telemetry
-drwxr-xr-x. 4 root root 4096 Apr 21 06:51 security
+total 76
+drwxr-xr-x. 5 root root  4096 Aug 22 03:00 base
+drwxr-xr-x. 4 root root  4096 Aug 22 03:00 gateways
+-rw-r--r--. 1 root root 16888 Aug 22 03:00 global.yaml
+drwxr-xr-x. 3 root root  4096 Aug 22 03:00 istio-cni
+drwxr-xr-x. 3 root root  4096 Aug 22 03:00 istio-control
+drwxr-xr-x. 3 root root  4096 Aug 22 03:00 istiocoredns
+drwxr-xr-x. 4 root root  4096 Aug 22 03:00 istiod-remote
+drwxr-xr-x. 4 root root  4096 Aug 22 03:00 istio-operator
+drwxr-xr-x. 3 root root  4096 Aug 22 03:00 istio-policy
+drwxr-xr-x. 8 root root  4096 Aug 22 03:00 istio-telemetry
+-rw-r--r--. 1 root root  2408 Aug 22 03:00 README-helm3.md
+-rw-r--r--. 1 root root  8629 Aug 22 03:00 README.md
+-rw-r--r--. 1 root root  2661 Aug 22 03:00 UPDATING-CHARTS.md
 ```
 
 直接执行如下命令即可安装[官方](https://istio.io/docs/setup/install/istioctl/#install-istio-using-the-default-profile)默认配置的istio。
 
 ```shell
-$ istioctl manifest apply --set profile=default
+$ istioctl install --set profile=default
 ```
 
 istio默认支持如下6种profile
@@ -225,27 +228,22 @@ istio默认支持如下6种profile
 ```shell
 # istioctl profile list
 Istio configuration profiles:
-    default
     demo
     empty
     minimal
     preview
     remote
+    default
 ```
 
-安装的组件的区别如下：
+安装的组件的区别[如下](https://istio.io/latest/docs/setup/additional-setup/config-profiles/)：
 
 |                        | default | demo | minimal | remote |
 | ---------------------- | ------- | ---- | ------- | ------ |
 | Core components        |         |      |         |        |
 | `istio-egressgateway`  |         | X    |         |        |
 | `istio-ingressgateway` | X       | X    |         |        |
-| `istio-pilot`          | X       | X    | X       |        |
-| Addons                 |         |      |         |        |
-| `grafana`              |         | X    |         |        |
-| `istio-tracing`        |         | X    |         |        |
-| `kiali`                |         | X    |         |        |
-| `prometheus`           | X       | X    |         | X      |
+| `istiod`               | X       | X    | X       |        |
 
 使用如下方式可以查看某个profile的配置信息，profile类型helm的values.yaml，用于给部署用的yaml提供配置参数。每个组件包含两部分内容：components下的组件以及组件的参数value
 
@@ -267,11 +265,20 @@ $ istioctl profile dump --config-path components.pilot default
 $ istioctl manifest generate --set profile=default --set hub=docker-local.com/openshift4 > $HOME/generated-manifest.yaml
 ```
 
-在进行确认或修改之后可以使用`apply`命令执行安装
+> `kubectl apply`可以使用`manifest generate`的输出来安装istio。但这种方式可能无法具有与`istioctl install`相同的资源依赖，且不会在istio发行版中进行测试。
+
+在进行确认或修改之后可以使用`apply`命令执行安装(**不推荐**)
 
 ```shell
 $ kubectl apply -f $HOME/generated-manifest.yaml
 ```
+
+> 如果尝试使用`istioctl manifest generate`进行istio的安装和管理，请注意以下事项：
+>
+> 1. 必须手动创建istio命名空间(默认为istio-system)
+> 2. 虽然`istioctl install`会自动探测kubernetes上下文中的环境设置，但`manifest generate`并不能脱机运行(即独立于istio安装环境运行)，这可能导致非预期的结果。特别地，在kubernetes环境不支持第三方service account token的前提下，用户必须遵守这些[步骤](https://istio.io/latest/docs/ops/best-practices/security/#configure-third-party-service-account-tokens)。
+> 3. 当依赖的资源不正确时，对生成的manifest执行`kubectl apply`时可能会显示错误。
+> 4. 当配置变更后(如移除一个gateway)`istioctl install`会自动清理所有的资源。当配合`kubectl`执行`istio manifest generate`时需要手动移除这些资源。
 
 使用如下方式校验安装结果
 
@@ -284,31 +291,27 @@ $ istioctl verify-install -f $HOME/generated-manifest.yaml
 - 使用`--set`选项进行设置，如下面用于设置profile中的`global.controlPlaneSecurityEnabled`为true
 
   ```shell
-  $ istioctl manifest apply --set values.global.controlPlaneSecurityEnabled=true
+  $ istioctl install --set values.global.controlPlaneSecurityEnabled=true
   ```
 
 - 如果修改的参数比较多，可以使用yaml文件统一进行配置，实际使用[ `IstioOperator  API`](https://istio.io/docs/reference/config/istio.operator.v1alpha1/)进行profile的修改
 
   ```shell
-  $ istioctl manifest apply -f samples/operator/pilot-k8s.yaml
+  $ istioctl install -f samples/operator/pilot-k8s.yaml
   ```
 
-istio的核心组件定义在 `IstioOperator` API的components下面：
+istio的核心组件定义在 `IstioOperator` API的[components](https://istio.io/latest/docs/reference/config/istio.operator.v1alpha1/#IstioComponentSetSpec)下面：
 
-| Components        |
-| ----------------- |
-| `base`            |
-| `pilot`           |
-| `proxy`           |
-| `sidecarInjector` |
-| `telemetry`       |
-| `policy`          |
-| `citadel`         |
-| `nodeagent`       |
-| `galley`          |
-| `ingressGateways` |
-| `egressGateways`  |
-| `cni`             |
+| Field             | Type                | Description | Required |
+| ----------------- | ------------------- | ----------- | -------- |
+| `base`            | `BaseComponentSpec` |             | No       |
+| `pilot`           | `ComponentSpec`     |             | No       |
+| `policy`          | `ComponentSpec`     |             | No       |
+| `telemetry`       | `ComponentSpec`     |             | No       |
+| `cni`             | `ComponentSpec`     |             | No       |
+| `istiodRemote`    | `ComponentSpec`     |             | No       |
+| `ingressGateways` | `GatewaySpec[]`     |             | No       |
+| `egressGateways`  | `GatewaySpec[]`     |             | No       |
 
 第三方插件可以在`IstioOperator API` 的addonComponents下指定，如：
 
@@ -316,9 +319,9 @@ istio的核心组件定义在 `IstioOperator` API的components下面：
 apiVersion: install.istio.io/v1alpha1
 kind: IstioOperator
 spec:
-  addonComponents:
-    grafana:
-      enabled: true
+  components:
+    telemetry:
+      enabled: false
 ```
 
 每个组件都有一个[`KubernetesResourceSpec`](https://istio.io/docs/reference/config/istio.operator.v1alpha1/#KubernetesResourcesSpec),用于设置如下k8s属性
@@ -341,9 +344,49 @@ spec:
 
 ##### 标准卸载istio
 
+使用如下方式可以移除kubernetes中所有istio组件
+
+```shell
+$ istioctl x uninstall --purge
+```
+
+使用如下方式可以移除某个特定的istio控制面
+
+```shell
+$ istioctl x uninstall <your original installation options>
+```
+
+或
+
 ```shell
 $ istioctl manifest generate <your original installation options> | kubectl delete -f -
 ```
+
+##### 自定义外部charts和profiles
+
+ `istioctl` `install`, `manifest generate` 和`profile` 命令都可以在charts和profiles中使用下面的资源：
+
+- charts内置的资源。如果没有设置`--manifests`选项，则为默认配置。charts内置的资源与Istio发行版`.tgz`的`manifests/`目录中资源相同.
+- 本地文件系统的charts。如`istioctl install --manifests istio-1.7.0/manifests`
+- Github上的charts，如`istioctl install --manifests https://github.com/istio/istio/releases/download/1.7.0/istio-1.7.0-linux-arm64.tar.gz`
+
+本地文件系统charts和profiles可以通过编辑`manifests/`目录下的文件实现自定义。建议拷贝`manifests`命令并对其进行修改。但必须保留`manifests`目录中的内容布局。
+
+可以通过编辑`manifests/profiles/`中的profile来创建新的profile文件。istioctl会扫描profiles子目录以及可以被`IstioOperatorSpec` profile字段引用的所有profile名称。在用户配置生效前会使用内置的profile作为默认的profile YAML。例如，可以创建一个名为`custom1.yaml`的文件，该文件自定义了`default` profile中的某些配置，然后应用该用户自定义的配置：
+
+```shell
+$ istioctl manifest generate --manifests mycharts/ --set profile=custom1 -f path-to-user-overlay.yaml
+```
+
+这种情况下， `custom1.yaml` 和`user-overlay.yaml`文件会覆盖`default.yaml`文件。
+
+一般来说，不需要创建新的配置文件，因为可以通过传递多个文件来覆盖获得类似的结果。例如，如下命令等同于传入了两个用户覆盖的文件：
+
+```shell
+$ istioctl manifest generate --manifests mycharts/ -f manifests/profiles/custom1.yaml -f path-to-user-overlay.yaml
+```
+
+只有在需要通过`istooperatorspec`按名称引用profile文件时，才需要创建自定义profile文件。
 
 ### 更新Istio
 
@@ -359,31 +402,43 @@ $ istioctl manifest generate <your original installation options> | kubectl dele
 $ istioctl install --set revision=canary
 ```
 
+> 注：revision中不能包含`.`
+
 命令执行成功后，可以看到存在2个控制面，每个控制面有各自的`Deployment`，`Service`等。
 
 ```shell
-$ oc get pod
-NAME                                   READY   STATUS    RESTARTS   AGE
-istio-ingressgateway-c9648ffbd-9pmwk   1/1     Running   0          113m
-istiod-788cf6c878-cmn47                1/1     Running   0          139m
-istiod-canary-79599d745b-ph7gj         1/1     Running   0          113m
-prometheus-597596ffdd-v28hk            2/2     Running   0          113m
+$ kubectl get pods -n istio-system -l app=istiod
+NAME                                    READY   STATUS    RESTARTS   AGE
+istiod-786779888b-p9s5n                 1/1     Running   0          114m
+istiod-canary-6956db645c-vwhsk          1/1     Running   0          1m
 
-$ oc get deploy
-NAME                   READY   UP-TO-DATE   AVAILABLE   AGE
-istio-ingressgateway   1/1     1            1           138m
-istiod                 1/1     1            1           139m
-istiod-canary          1/1     1            1           113m
-prometheus             1/1     1            1           138m
+$ kubectl get svc -n istio-system -l app=istiod
+NAME            TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)                                                AGE
+istiod          ClusterIP   10.32.5.247   <none>        15010/TCP,15012/TCP,443/TCP,15014/TCP                  33d
+istiod-canary   ClusterIP   10.32.6.58    <none>        15010/TCP,15012/TCP,443/TCP,15014/TCP,53/UDP,853/TCP   12m
 ```
 
 sidecar注入配置也有2套
 
 ```shell
-$ oc get mutatingwebhookconfigurations
+$ kubectl get mutatingwebhookconfigurations
 NAME                            CREATED AT
-istio-sidecar-injector          2020-05-22T02:42:57Z
-istio-sidecar-injector-canary   2020-05-22T03:08:28Z
+istio-sidecar-injector          2020-03-26T07:09:21Z
+istio-sidecar-injector-canary   2020-04-28T19:03:26Z
+```
+
+##### 卸载老的控制面
+
+使用如下命令卸载`revision`为`1-6-5`的控制面
+
+```shell
+$ istioctl x uninstall --revision 1-6-5
+```
+
+如果没有revision标签，则使用原始安装它的选项进行卸载
+
+```shell
+$ istioctl x uninstall -f manifests/profiles/default.yaml
 ```
 
 ##### 数据面升级
