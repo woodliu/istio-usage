@@ -107,7 +107,7 @@ EOF
 ```
 
 ```shell
-$ istioctl manifest install -f cni-annotations.yaml
+$ istioctl manifest install -f cni-annotations.yaml --set meshConfig.accessLogFile="/dev/stdout"
 ```
 
 安装结果如下：

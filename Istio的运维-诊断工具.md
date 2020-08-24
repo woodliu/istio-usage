@@ -66,7 +66,20 @@ $ istioctl proxy-config endpoints <pod-name> [flags]
 
 更多参见下一节[调试Envoy和istiod](https://istio.io/docs/ops/diagnostic-tools/proxy-cmd/)
 
-> istio的listener，route，cluster和endpoint与Envoy中的[概念](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/intro/terminology#:~:text=Listener%3A%20A%20listener%20is%20a,hosts%20that%20Envoy%20connects%20to.)类似。istio的listener给出了kubernetes中可以被下游客户端连接的命名网络地址(不含serviceEntry)，如pod:port，service:port等；route给出了仅通过RDS获取到的路由；cluster给出了Envoy可以连接的上游主机地址和端口(含serviceEntry)，通过服务发现获取；endpoint为cluster对应的后端地址。
+> istio的listener，route，cluster和endpoint与Envoy中的[概念](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/intro/terminology#:~:text=Listener%3A%20A%20listener%20is%20a,hosts%20that%20Envoy%20connects%20to.)类似。
+>
+> - Cluster：在Envoy中，Cluster是一个服务集群，Cluster中包含一个到多个endpoint，每个endpoint都可以提供服务，Envoy根据负载均衡算法将请求发送到这些endpoint中。cluster分为inbound和outbound两种，前者对应Envoy所在节点上的服务；后者占了绝大多数，对应Envoy所在节点的外部服务。可以使用如下方式分别查看inbound和outbound的cluster：
+>
+>   ```shell
+>   # istioctl pc cluster productpage-v1-64794f5db4-4h8c8.default --direction inbound -ojson
+>   # istioctl pc cluster productpage-v1-64794f5db4-4h8c8.default --direction outbound -ojson
+>   ```
+>
+> - Listeners：Envoy采用listener来接收并处理downstream发过来的请求。更多监听端口参见下文
+>
+> - Routes：配置Envoy的路由规则。Istio下发的缺省路由规则中对每个端口(服务)设置了一个路由规则，根据host来对请求进行路由分发，routes的目的为其他服务的cluster
+>
+> - Endpoint：cludter对应的后端服务，可以通过istio pc endpoint查看inbound和outbound对应的endpoint信息
 
 ## 调试Envoy和istiod
 
@@ -200,8 +213,9 @@ zipkin                                                 -       -       -        
    | Port  | Protocol | Used by                     | Description                             |
    | ----- | -------- | --------------------------- | --------------------------------------- |
    | 15000 | TCP      | Envoy                       | Envoy admin port (commands/diagnostics) |
-   | 15001 | TCP      | Envoy √                     | Envoy Outbound                          |
-   | 15006 | TCP      | Envoy √                     | Envoy Inbound                           |
+   | 15001 | TCP      | Envoy                       | Envoy Outbound                          |
+   | 15006 | TCP      | Envoy                       | Envoy Inbound                           |
+   | 15008 | TCP      | Envoy                       | Envoy Tunnel port (Inbound)             |
    | 15020 | HTTP     | Envoy                       | Istio agent Prometheus telemetry        |
    | 15021 | HTTP     | Envoy                       | Health checks                           |
    | 15090 | HTTP     | Envoy                       | Envoy Prometheus telemetry              |
@@ -880,3 +894,8 @@ istio组件能够自动管理日志滚动，将大的日志切分为小的日志
 ### 组件调试
 
 `--log_caller` 和`--log_stacktrace_level`选项可以控制日志信息是否包含程序员级别的信息。在跟踪组件bug时很有用，但日常用不到。
+
+### 参考
+
+- [Istio流量管理实现机制深度解析](https://zhaohuabing.com/post/2018-09-25-istio-traffic-management-impl-intro/#virtual-listener)
+- [理解 Istio Service Mesh 中 Envoy Sidecar 代理的路由转发](https://jimmysong.io/blog/envoy-sidecar-routing-of-istio-service-mesh-deep-dive/)

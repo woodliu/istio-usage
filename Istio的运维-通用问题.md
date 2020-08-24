@@ -50,7 +50,7 @@ trafficPolicy:
     mode: ISTIO_MUTUAL
 ```
 
-否则，会使用默认的模式`DISABLE`，这样会导致客户端的sidecar代理发生HTTP明文请求，而非TLS加密的HTTPS请求，这样就会产生请求冲突(服务端期望接收加密的请求)。
+否则，会使用默认的模式`DISABLE`，这样会导致客户端的sidecar代理发送HTTP明文请求，而非TLS加密的HTTPS请求，这样就会产生请求冲突(服务端期望接收加密的请求)。
 
 当使用`DestinationRule`时应该保证`trafficPolicy`的TLS模式与全局配置匹配。
 
