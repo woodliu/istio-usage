@@ -65,7 +65,7 @@ $ export INGRESS_HOST=$(kubectl get po -l istio=ingressgateway -n istio-system -
 
 一个ingress[网关](https://istio.io/docs/reference/config/networking/gateway/)描述了在网格边缘用于接收入站HTTP/TCP连接的负载均衡，配置了暴露的端口，协议等。[kubernetes ingress资源](https://kubernetes.io/docs/concepts/services-networking/ingress/)不包括任何流量路由配置。ingress 流量的路由使用istio路由规则，与内部服务请求相同：
 
-1. 创建istio `Gateway`，将来自`httpbin.example.com`的流量导入网格的`80`端口(即默认的`ingressgateway`pod)
+1. 创建istio `Gateway`，网关监听地址为`httpbin.example.com`，端口为`80`(位于默认的`ingressgateway`pod中)
 
    ```yaml
    kubectl apply -f - <<EOF
@@ -78,15 +78,15 @@ $ export INGRESS_HOST=$(kubectl get po -l istio=ingressgateway -n istio-system -
        istio: ingressgateway # use Istio default gateway implementation
      servers:
      - port:
-         number: 80
+         number: 80 #gateway暴露80端口
          name: http
          protocol: HTTP
-       hosts:
+       hosts: #gateway暴露的主机名
        - "httpbin.example.com"
    EOF
    ```
 
-2. 通过`Gateway`配置进入的流量路由，将来自`httpbin.example.com`，且目的地为`/status`或`/delay`的请求分发到`httpbin`服务的`8000`端口，其他请求会返回404响应。
+2. 通过`Gateway`配置进入的流量路由，将URI为`httpbin.example.com`，且目的地为`/status`或`/delay`的请求分发到`httpbin`服务的`8000`端口，其他请求会返回404响应。
 
    ```yaml
    kubectl apply -f - <<EOF
@@ -95,8 +95,8 @@ $ export INGRESS_HOST=$(kubectl get po -l istio=ingressgateway -n istio-system -
    metadata:
      name: httpbin
    spec:
-     hosts:
-     - "httpbin.example.com"
+     hosts: #virtual service的hosts字段与Gateway的servers.hosts字段需要匹配
+     - "httpbin.example.com" 
      gateways:
      - httpbin-gateway
      http:
@@ -120,7 +120,7 @@ $ export INGRESS_HOST=$(kubectl get po -l istio=ingressgateway -n istio-system -
    httpbin       ClusterIP      10.84.222.69   <none>    8000/TCP   19h
    ```
 
-   > 来自网格内部其他服务的请求则不受此规则的约束，会使用默认的轮询路由进行请求分发。为了限制内部的调用规则，可以将特定的值`mesh`添加到`gateways`列表中。由于内部服务的主机名可能与外部不同，因此需要将主机名添加到`hosts`列表中。
+   > 来自网格内部其他服务的请求则不受此规则的约束，会使用默认的轮询路由进行请求分发。为了限制内部的调用规则，可以将特定的值`mesh`添加到`gateways`列表中。由于内部服务主机名(如`httpbin.default.svc.cluster.local`) 可能与外部不同，因此需要将主机名添加到`hosts`列表中。
 
 3. 使用curl命令访问`httpbin`服务，此时通过`-H`选项修改了HTTP请求首部的`Host`字段，使用http2的nodeport方式访问：
 
@@ -165,7 +165,7 @@ spec:
       name: http
       protocol: HTTP
     hosts:
-    - "*"  #指定通配符，不限制外部流量的地址
+    - "*"  #指定通配符，监听所有流量，不限制外部流量的地址
 ---
 apiVersion: networking.istio.io/v1alpha3
 kind: VirtualService
@@ -203,7 +203,7 @@ EOF
    $ kubectl get gateway --all-namespaces
    ```
 
-3. **校验没有在相同的IP和端口上定义kubernetes ingress资源**
+3. 校验没有在相同的IP和端口上定义kubernetes ingress资源
 
    ```shell
    $ kubectl get ingress --all-namespaces
@@ -221,7 +221,7 @@ $ kubectl delete --ignore-not-found=true -f samples/httpbin/httpbin.yaml
 
 ## [Ingress(kubernetes)](https://istio.io/docs/tasks/traffic-management/ingress/kubernetes-ingress/)
 
-执行[ingress流量控制](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control/)中的[Before you begin](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control#before-you-begin) 的[Before you begin](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control#before-you-begin) 和[Determining the ingress IP and ports](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control/#determining-the-ingress-ip-and-ports)小节的操作，部署`httpbin`服务。本节介绍如何通过kubernetes的`Ingress`(非istio的gateway)进行访问。
+执行[ingress流量控制](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control/)中的[Before you begin](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control#before-you-begin)和[Determining the ingress IP and ports](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control/#determining-the-ingress-ip-and-ports)小节的操作，部署`httpbin`服务。本节介绍如何通过kubernetes的`Ingress`(非istio的gateway)进行访问。
 
 下面展示如何配置一个80端口的`Ingress`，用于HTTP流量：
 
@@ -263,7 +263,7 @@ $ kubectl delete --ignore-not-found=true -f samples/httpbin/httpbin.yaml
    x-envoy-upstream-service-time: 20
    ```
 
-   httpbin服务的发现是通过EDS实现的，使用如下命令查看：
+   httpbin的服务发现是通过EDS实现的，使用如下命令查看：
 
    ```shell
    $ istioctl proxy-config cluster istio-ingressgateway-569669bb67-b6p5r|grep 8000
@@ -327,7 +327,7 @@ $ kubectl delete --ignore-not-found=true -f samples/httpbin/httpbin.yaml
 
 TLS需要的私钥，服务端证书，根证书是使用基于文件装载的方法配置的。
 
-执行[ingress流量控制](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control/)中的[Before you begin](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control#before-you-begin) 的[Before you begin](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control#before-you-begin) 和[Determining the ingress IP and ports](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control/#determining-the-ingress-ip-and-ports)小节的操作，部署`httpbin`服务，并获取 `INGRESS_HOST` 和`SECURE_INGRESS_PORT`变量。
+执行[ingress流量控制](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control/)中的[Before you begin](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control#before-you-begin)和[Determining the ingress IP and ports](https://istio.io/docs/tasks/traffic-management/ingress/ingress-control/#determining-the-ingress-ip-and-ports)小节的操作，部署`httpbin`服务，并获取 `INGRESS_HOST` 和`SECURE_INGRESS_PORT`变量。
 
 ### 生成服务端证书和私钥
 
@@ -579,7 +579,7 @@ TLS需要的私钥，服务端证书，根证书是使用基于文件装载的�
    $ kubectl create -n istio-system secret tls helloworld-credential --key=helloworld-v1.example.com.key --cert=helloworld-v1.example.com.crt
    ```
 
-5. 定义两个网关，网关端口为443。在`credentialName`字段分别设置`httpbin-credential`和`helloworld-credential`，TLS模式为`SIMPLE`。
+5. 定义一个网关，网关端口为443。在`credentialName`字段分别设置`httpbin-credential`和`helloworld-credential`，TLS模式为`SIMPLE`。
 
    ```yaml
    $ cat <<EOF | kubectl apply -f -
@@ -727,8 +727,13 @@ $ kubectl create -n istio-system secret generic httpbin-credential --from-file=t
    curl: (35) NSS: client certificate not found (nickname not specified)
    ```
 
-3. 生成client的证书和私钥。在`curl`中传入客户端的证书和私钥，使用`--cert`传入客户端证书，使用`--key`传入私钥
+3. 使用公钥`example.com.crt`生成client的证书和私钥。在`curl`中传入客户端的证书和私钥，使用`--cert`传入客户端证书，使用`--key`传入私钥
 
+   ```shell
+   $ openssl req -out client.example.com.csr -newkey rsa:2048 -nodes -keyout client.example.com.key -subj "/CN=client.example.com/O=client organization"
+   $ openssl x509 -req -days 365 -CA example.com.crt -CAkey example.com.key -set_serial 1 -in client.example.com.csr -out client.example.com.crt
+   ```
+   
    ```shell
    $ curl -v -HHost:httpbin.example.com --resolve "httpbin.example.com:$SECURE_INGRESS_PORT:$INGRESS_HOST" --cacert example.com.crt --cert ./client.example.com.crt --key ./client.example.com.key "https://httpbin.example.com:$SECURE_INGRESS_PORT/status/418"
    ...
@@ -892,7 +897,7 @@ istio支持几种不同的Secret格式，来支持与多种工具的集成，如
 
 4. 部署NGINX服务
 
-   ```shell
+   ```yaml
    $ cat <<EOF | istioctl kube-inject -f - | kubectl apply -f -
    apiVersion: v1
    kind: Service
@@ -959,9 +964,9 @@ istio支持几种不同的Secret格式，来支持与多种工具的集成，如
 
 ### 配置一个ingress gateway
 
-1. 定义一个gateway，端口为443.注意TLS的模式为`PASSTHROUGH`，表示gateway会放行ingress流量，不会终止TLS
+1. 定义一个gateway，端口为`443`.注意TLS的模式为`PASSTHROUGH`，表示gateway会放行ingress流量，不终止TLS
 
-   ```shell
+   ```yaml
    $ kubectl apply -f - <<EOF
    apiVersion: networking.istio.io/v1alpha3
    kind: Gateway
@@ -984,7 +989,7 @@ istio支持几种不同的Secret格式，来支持与多种工具的集成，如
 
 2. 配置经过Gateway的流量路由
 
-   ```shell
+   ```yaml
    $ kubectl apply -f - <<EOF
    apiVersion: networking.istio.io/v1alpha3
    kind: VirtualService
@@ -1051,3 +1056,16 @@ istio支持几种不同的Secret格式，来支持与多种工具的集成，如
    ```shell
    $ rm ./nginx.conf
    ```
+
+### TIPS
+
+Gateway支持的[TLS模式](https://istio.io/latest/docs/reference/config/networking/gateway/#ServerTLSSettings-TLSmode)如下：
+
+| Name               | Description                                                  |
+| ------------------ | ------------------------------------------------------------ |
+| `PASSTHROUGH`      | The SNI string presented by the client will be used as the match criterion in a VirtualService TLS route to determine the destination service from the service registry. |
+| `SIMPLE`           | Secure connections with standard TLS semantics.              |
+| `MUTUAL`           | Secure connections to the downstream using mutual TLS by presenting server certificates for authentication. |
+| `AUTO_PASSTHROUGH` | Similar to the passthrough mode, except servers with this TLS mode do not require an associated VirtualService to map from the SNI value to service in the registry. The destination details such as the service/subset/port are encoded in the SNI value. The proxy will forward to the upstream (Envoy) cluster (a group of endpoints) specified by the SNI value. This server is typically used to provide connectivity between services in disparate L3 networks that otherwise do not have direct connectivity between their respective endpoints. Use of this mode assumes that both the source and the destination are using Istio mTLS to secure traffic. |
+| `ISTIO_MUTUAL`     | Secure connections from the downstream using mutual TLS by presenting server certificates for authentication. Compared to Mutual mode, this mode uses certificates, representing gateway workload identity, generated automatically by Istio for mTLS authentication. When this mode is used, all other fields in `TLSOptions` should be empty. |
+

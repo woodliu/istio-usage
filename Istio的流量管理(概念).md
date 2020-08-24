@@ -278,7 +278,7 @@ spec:
   selector:              #指定gateway配置下发的代理，如具有标签app: my-gateway-controller的pod
     app: my-gateway-controller
   servers:
-  - port:                #gateway pod暴露的端口信息
+  - port:                #gateway pod暴露的端口信息,监听外部连接
       number: 443
       name: https
       protocol: HTTPS
@@ -290,7 +290,7 @@ spec:
       privateKey: /tmp/tls.key
 ```
 
-上述gateway配置允许来自`ext-host.example.com` 流量进入网格的443端口，但没有指定该流量的路由。(*此时流量只能进入网格，但没有指定处理该流量的服务，因此需要与virtual service进行绑定*)
+上述gateway配置监听来自`ext-host.example.com` 流量进入网格的443端口，但没有指定该流量的路由。(*此时流量只能进入网格，但没有指定处理该流量的服务，因此需要与virtual service进行绑定*)
 
 为了给gateway指定路由，需要通过virtual service的`gateway`字段，将gateway绑定到一个virtual service上，将来自`ext-host.example.com`流量引入一个`VirtualService`，`hosts`可以是通配符，表示引入匹配到的流量。
 
@@ -301,12 +301,14 @@ metadata:
   name: virtual-svc
 spec:
   hosts:
-  - ext-host.example.com
-  gateways:        #将gateway "ext-host-gwy"绑定到virtual service "virtual-svc"上，接收并处理来自gateway上的ext-host.example.com:443的流量。注意此处并没有指定后端服务
+  - ext-host.example.com #指定了处理gateway流量的目的地
+  gateways:        #将gateway "ext-host-gwy"绑定到virtual service上，接收并处理来自gateway上的流量
   - ext-host-gwy
 ```
 
 > 可以使用<gateway namespace>/<gateway name>格式引用其他命名空间的gateway，如果没有指定命名空间，则默认使用与virtual service相同的命名空间，参见virtual service gateway字段[描述](https://istio.io/latest/docs/reference/config/networking/virtual-service/#VirtualService)
+>
+> Gateway的spec.servers.hosts与VirtualService的spec.hosts有匹配关系，具体参见gateway server[描述](https://istio.io/latest/docs/reference/config/networking/gateway/#Server)
 
 ### [Service entries](https://istio.io/docs/reference/config/networking/service-entry/#ServiceEntry)
 
