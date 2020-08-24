@@ -1,6 +1,6 @@
 # Istio的流量管理(实操二)
 
-涵盖官方文档[Traffic Management](https://istio.io/docs/tasks/traffic-management/)章节中的inrgess部分。
+涵盖官方文档[Traffic Management](https://istio.io/latest/docs/tasks/traffic-management/ingress/)章节中的inrgess部分。
 
 [TOC]
 

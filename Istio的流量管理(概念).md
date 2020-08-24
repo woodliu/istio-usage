@@ -302,9 +302,11 @@ metadata:
 spec:
   hosts:
   - ext-host.example.com
-  gateways:        #将gateway "ext-host-gwy"绑定到virtual service "virtual-svc"上，接收并处理来自该gateway的流量
+  gateways:        #将gateway "ext-host-gwy"绑定到virtual service "virtual-svc"上，接收并处理来自gateway上的ext-host.example.com:443的流量。注意此处并没有指定后端服务
   - ext-host-gwy
 ```
+
+> 可以使用<gateway namespace>/<gateway name>格式引用其他命名空间的gateway，如果没有指定命名空间，则默认使用与virtual service相同的命名空间，参见virtual service gateway字段[描述](https://istio.io/latest/docs/reference/config/networking/virtual-service/#VirtualService)
 
 ### [Service entries](https://istio.io/docs/reference/config/networking/service-entry/#ServiceEntry)
 

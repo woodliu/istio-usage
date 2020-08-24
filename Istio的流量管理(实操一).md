@@ -114,7 +114,7 @@ Bookinfo应用部署在`default`命名空间下，使用自动注入sidecar的�
     wildcardPolicy: None
   ```
 
-  > 此处先不根据官方文档配置ingress，后续再配置
+  > 如果发现按照官方文档创建ingress之后无法通过ingress(route)进行访问，但可以通过k8s的service进行访问。需要确认下istio sidecar的版本是不是和istio版本匹配。通常升级之后，sidecar也需要重新注入。
 
 - 配置默认的destination rules
 
@@ -490,7 +490,7 @@ spec:
 
 打开 `/productpage` 页面，使用`jason`用户登陆，可以看到如下错误。退出用户`jason`后该错误消失。
 
-![](./images/Fault Injection2.png)
+![](https://img2020.cnblogs.com/blog/1334952/202005/1334952-20200514144158749-1617300571.png)
 
 删除注入的中断故障
 
@@ -500,15 +500,13 @@ $ kubectl delete -f samples/bookinfo/networking/virtual-service-ratings-test-abo
 
 ### 卸载
 
-环境清理
-
 ```shell
 $ kubectl delete -f samples/bookinfo/networking/virtual-service-all-v1.yaml
 ```
 
 ## [流量迁移](https://istio.io/docs/tasks/traffic-management/traffic-shifting/)
 
-本章展示如何将流量从一个版本的微服务上迁移到另一个版本的微服务，如将流量从老版本切换到新版本。通常情况下会逐步进行流量切换，istio下可以基于百分比进行流量切换。注意各个版本的权重之和必须等于100，否则会报`total destination weight ${weight-total}= 100`的错误，${weight-total}为当前配置的权重之和。
+本章展示如何将流量从一个版本的微服务迁移到另一个版本的微服务，如将流量从老版本切换到新版本。通常情况下会逐步切换流量，istio下可以基于百分比进行流量切换。注意各个版本的权重之和必须等于100，否则会报`total destination weight ${weight-total}= 100`的错误，`${weight-total}`为当前配置的权重之和。
 
 ### 基于权重的路由
 
@@ -563,7 +561,7 @@ $ kubectl delete -f samples/bookinfo/networking/virtual-service-all-v1.yaml
 
 ## [TCP流量迁移](https://istio.io/docs/tasks/traffic-management/tcp-traffic-shifting/)
 
-本节展示如何将TCP流量从一个版本的迁移到另一个版本。例如将TCP的流量从老版本迁移到新版本。
+本节展示如何将TCP流量从一个版本迁移到另一个版本。例如将TCP的流量从老版本迁移到新版本。
 
 ### 基于权重的TCP路由
 
@@ -573,7 +571,7 @@ $ kubectl delete -f samples/bookinfo/networking/virtual-service-all-v1.yaml
 $ kubectl create namespace istio-io-tcp-traffic-shifting
 ```
 
-openshift下面需要授权1337的用户进行sidecar注入
+openshift下面需要授权`1337`的用户进行sidecar注入
 
 ```shell
 $ oc adm policy add-scc-to-group privileged system:serviceaccounts:istio-io-tcp-traffic-shifting
@@ -963,7 +961,7 @@ $ kubectl apply -f samples/httpbin/httpbin.yaml
 
 在上面的`DestinationRule`设定中指定了`maxConnections: 1` 和 `http1MaxPendingRequests: 1`，表示如果并发的连接数和请求数大于1，则后续的请求和连接会失败，此时触发断路。
 
-1. 使用两条并发的连接 (`-c 2`) ，并发生20个请求 (`-n 20`):
+1. 使用两条并发的连接 (`-c 2`) ，并发出20个请求 (`-n 20`):
 
    ```shell
    $ kubectl exec -it $FORTIO_POD  -c fortio /usr/bin/fortio -- load -c 2 -qps 0 -n 20 -loglevel Warning http://httpbin:8000/get
@@ -995,17 +993,16 @@ $ kubectl apply -f samples/httpbin/httpbin.yaml
    Response Header Sizes : count 20 avg 184.05 +/- 92.03 min 0 max 231 sum 3681
    Response Body/Total Sizes : count 20 avg 701.05 +/- 230 min 241 max 817 sum 14021
    All done 20 calls (plus 0 warmup) 4.166 ms avg, 388.2 qps
-   
    ```
-
-   主要关注的内容如下，可以看到大部分请求都是成功的，但也有一小部分失败
-
-   ```shell
+   
+主要关注的内容如下，可以看到大部分请求都是成功的，但也有一小部分失败
+   
+```shell
    Sockets used: 6 (for perfect keepalive, would be 2)
    Code 200 : 16 (80.0 %)
    Code 503 : 4 (20.0 %)
    ```
-
+   
 2. 将并发连接数提升到3
 
    ```shell
@@ -1300,7 +1297,7 @@ $ kubectl delete svc httpbin fortio
 
   当流量配置了镜像时，发送到镜像服务的请求会在Host/Authority首部之后加上`-shadow`，如`cluster-1` 变为`cluster-1-shadow`。**需要注意的是，镜像的请求是"发起并忘记"的方式，即会丢弃对镜像请求的响应**。
 
-  可以使用``mirror_percent` `字段镜像一部分流量，而不是所有的流量。如果没有出现该字段，为了兼容老版本，会镜像所有的流量。
+  可以使用`mirror_percent` 字段镜像一部分流量，而不是所有的流量。如果没有出现该字段，为了兼容老版本，会镜像所有的流量。
 
 - 发送流量
 
