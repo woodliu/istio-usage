@@ -219,7 +219,7 @@ kind: DestinationRule
 metadata:
   name: my-destination-rule
 spec:
-  host: my-svc # 流量分发的目的地，k8s的service或serviceEntry声明的hosts
+  host: my-svc # 流量分发的目的地，istio注册表中的服务
   trafficPolicy:     #默认的负载均衡策略模型为随机
     loadBalancer:
       simple: RANDOM
@@ -341,7 +341,11 @@ spec:
   resolution: DNS         #主机服务的发现模型
 ```
 
-使用`hosts`字段可以是一个完整的域名，也可以是使用前缀通配符的域名。
+使用[hosts](https://istio.io/latest/docs/reference/config/networking/service-entry/#ServiceEntry)字段可以是一个完整的域名，也可以是使用前缀通配符的域名。
+
+> - hosts 字段可以用于匹配VirtualServices 和DestinationRules.
+> - 对于HTTP流量， HTTP Host/Authority 首部字段将会与hosts 字段进行匹配
+> - 对于包含Server Name Indication (SNI)的HTTPS或TLS流量将会与hosts 字段进行匹配
 
 可以使用virtual service和destination rule来控制到达一个service entry的流量。例如，下面destination rule配置了流量路由使用mutual TLS来加密到达外部服务`ext-svc.example.com`间的连接。
 

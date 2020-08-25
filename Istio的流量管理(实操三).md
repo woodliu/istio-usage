@@ -6,7 +6,7 @@
 
 ## 访问外部服务
 
-由于启用了istio的pod的出站流量默认都会被重定向到代理上，因此对集群外部URL的访问取决于代理的配置。默认情况下，Envoy代理透传对未知服务的访问，虽然这种方式为新手提供了便利，但最好配置更严格的访问控制。
+由于启用了istio的pod的出站流量默认都会被重定向到代理上，因此对集群外部URL的访问取决于代理的配置。默认情况下，Envoy代理会透传对未知服务的访问，虽然这种方式为新手提供了便利，但最好配置更严格的访问控制。
 
 本节展示使用如下三种方式访问外部服务:
 
@@ -28,7 +28,7 @@
   $ export SOURCE_POD=$(kubectl get pod -l app=sleep -o jsonpath={.items..metadata.name})
   ```
 
-### Envoy转发流量到外部服务
+### Envoy透传流量到外部服务
 
 istio有一个[安装选项](https://istio.io/docs/reference/config/istio.mesh.v1alpha1/#MeshConfig-OutboundTrafficPolicy-Mode)，`meshConfig.outboundTrafficPolicy.mode`，用于配置sidecar处理外部服务(即没有定义到istio内部服务注册中心的服务)。如果该选项设置为`ALLOW_ANY`，则istio代理会放行到未知服务的请求；如果选项设置为`REGISTRY_ONLY`，则istio代理会阻塞没有在网格中定义HTTP服务或服务表项的主机。默认值为`ALLOW_ANY`，允许快速对istio进行评估。
 
@@ -54,7 +54,7 @@ istio有一个[安装选项](https://istio.io/docs/reference/config/istio.mesh.v
    HTTP/2 200
    ```
 
-   使用这种方式可以访问外部服务，但没有对该流量进行监控和控制，下面介绍如何监控和控制网格到外部服务的流量。
+   使用这种方式可以访问外部服务，但无法对该流量进行监控和控制，下面介绍如何监控和控制网格到外部服务的流量。
 
 ### 控制访问外部服务
 
@@ -70,7 +70,7 @@ istio有一个[安装选项](https://istio.io/docs/reference/config/istio.mesh.v
    $ kubectl get configmap istio -n istio-system -o yaml | sed 's/mode: ALLOW_ANY/mode: REGISTRY_ONLY/g' | kubectl replace -n istio-system -f -
    ```
 
-2. 从SOURCE_POD访问外部HTTPS服务，此时请求会被阻塞
+2. 从SOURCE_POD访问外部HTTPS服务，此时请求会被阻塞(可能需要等一段时间来使配置生效)
 
    ```shell
    $ kubectl exec -it $SOURCE_POD -c sleep -- curl -I https://www.baidu.com | grep  "HTTP/"; kubectl exec -it $SOURCE_POD -c sleep -- curl -I https://edition.cnn.com | grep "HTTP/"
@@ -81,6 +81,18 @@ istio有一个[安装选项](https://istio.io/docs/reference/config/istio.mesh.v
 #### 访问外部HTTP服务
 
 1. 创建一个`ServiceEntry`注册外部服务，这样就可以直接访问外部HTTP服务，可以看到此处并没有用到virtual service和destination rule
+
+   > 下面serviceEntry使用`DNS` 作为resolution是一种比较安全的方式，将resolution设置为`NONE`将可能导致攻击。例如，恶意客户可能会再HOST首部中设置`httpbin.org`，但实际上访问的不同的IP地址。istio sidecar代理会信任HOST首部，并错误地允许此次访问(即使会将流量传递到不同于主机的IP地址)，该主机可能是一个恶意网站，或是一个被网格安全策略屏蔽的合法网站。
+   >
+   > 使用`DNS` resolution时，sidecar代理会忽略原始目的地址，并将流量传递给`hosts`字段的主机。在转发流量前会使用DNS请求`hosts`字段的IP地址。
+   >
+   > serviceEntry包括如下三种[resolution](https://istio.io/latest/docs/reference/config/networking/service-entry/#ServiceEntry-Resolution)：
+   >
+   > | Name     | Description                                                  |
+   > | -------- | ------------------------------------------------------------ |
+   > | `NONE`   | Assume that incoming connections have already been resolved (to a specific destination IP address). Such connections are typically routed via the proxy using mechanisms such as IP table REDIRECT/ eBPF. After performing any routing related transformations, the proxy will forward the connection to the IP address to which the connection was bound. |
+   > | `STATIC` | Use the static IP addresses specified in endpoints (see below) as the backing instances associated with the service. |
+   > | `DNS`    | Attempt to resolve the IP address by querying the ambient DNS, during request processing. If no endpoints are specified, the proxy will resolve the DNS address specified in the hosts field, if wildcards are not used. If endpoints are specified, the DNS addresses specified in the endpoints will be resolved to determine the destination IP address. DNS resolution cannot be used with Unix domain socket endpoints. |
 
    ```shell
    $ kubectl apply -f - <<EOF
@@ -177,12 +189,12 @@ istio有一个[安装选项](https://istio.io/docs/reference/config/istio.mesh.v
      name: httpbin-ext
    spec:
      hosts:
-       - httpbin.org
+       - httpbin.org #此处的hosts与serviceEntry的hosts字段内容对应
      http:
      - timeout: 3s
        route:
          - destination:
-             host: httpbin.org
+             host: httpbin.org 
            weight: 100
    EOF
    ```
@@ -206,7 +218,7 @@ $ kubectl delete virtualservice httpbin-ext --ignore-not-found=true
 
 #### 直接访问外部服务
 
-可以配置Envoy sidecar，使其不拦截特定IP段的请求。为了实现该功能，可以修改`global.proxy.includeIPRanges`或`global.proxy.excludeIPRanges`[配置选项](https://archive.istio.io/v1.4/docs/reference/config/installation-options/)(*类似白名单和黑名单*)，并使用`kubectl apply`命令更新`istio-sidecar-injector`配置。也可以修改annotations  `traffic.sidecar.istio.io/includeOutboundIPRanges`达到相同的效果。在更新`istio-sidecar-injector`配置后，相应的变动会影响到所有的应用pod。
+可以配置Envoy sidecar，使其不拦截特定IP段的请求。为了实现该功能，可以修改`global.proxy.includeIPRanges`或`global.proxy.excludeIPRanges`[配置选项](https://archive.istio.io/v1.4/docs/reference/config/installation-options/)(*类似白名单和黑名单*)，并使用`kubectl apply`命令更新`istio-sidecar-injector`配置。也可以修改annotations  `traffic.sidecar.istio.io/includeOutboundIPRanges`来达到相同的效果。在更新`istio-sidecar-injector`配置后，相应的变动会影响到所有的应用pod。
 
 > 与使用ALLOW_ANY流量策略配置sidecar放行所有到未知服务的流量不同，上述方式会绕过sidecar的处理，即在特定IP段上不启用istio功能。使用这种方式不能增量地为特定目的地添加service entry，但使用`ALLOW_ANY`方式是可以的，因此这种方式仅仅建议用于性能测试或其他特殊场景中。
 
@@ -273,7 +285,7 @@ $ export SOURCE_POD=$(kubectl get pod -l app=sleep -o jsonpath={.items..metadata
 
 创建`ServiceEntry` 和`VirtualService`访问 `edition.cnn.com`
 
-```shell
+```yaml
 $ kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1alpha3
 kind: ServiceEntry
@@ -281,7 +293,7 @@ metadata:
   name: edition-cnn-com
 spec:
   hosts:
-  - edition.cnn.com
+  - edition.cnn.com #外部服务URI
   ports:
   - number: 80     # HTTP访问
     name: http-port
@@ -297,7 +309,7 @@ metadata:
   name: edition-cnn-com
 spec:
   hosts:
-  - edition.cnn.com #客户端访问的外部地址
+  - edition.cnn.com #外部服务URI
   tls:
   - match: #将edition.cnn.com:443的流量分发到edition.cnn.com:443
     - port: 443
@@ -305,7 +317,7 @@ spec:
       - edition.cnn.com
     route:
     - destination:
-        host: edition.cnn.com #与gateway不同，此处并没有将virtualservice与serviceentry进行绑定
+        host: edition.cnn.com
         port:
           number: 443
       weight: 100
@@ -334,7 +346,7 @@ HTTP/2 200
 
 重新定义 `ServiceEntry` 和`VirtualService` ，并增加`DestinationRule`来执行TLS源。此时`VirtualService`会将HTTP请求流量从80端口重定向到`DestinationRule`的443端口，作为TLS源。与前面不同，此时客户端只能通过HTTP进行访问。
 
-```shell
+```yaml
 $ kubectl apply -f - <<EOF
 apiVersion: networking.istio.io/v1alpha3
 kind: ServiceEntry # serviceEntry跟前面配置一样
@@ -374,7 +386,7 @@ kind: DestinationRule
 metadata:
   name: edition-cnn-com
 spec:
-  host: edition.cnn.com #此处与serviceEntry注册的hosts相同，配置发往serviceEntry的流量规则
+  host: edition.cnn.com #istio注册表中的服务
   subsets:
   - name: tls-origination
     trafficPolicy:
@@ -415,7 +427,7 @@ $ kubectl delete -f samples/sleep/sleep.yaml
 
 ### 使用场景
 
-假设在一个安全要求比较高的组织中，所有离开服务网格的流量都要经过一个指定的节点，这些节点会运行在指定的机器上，与运行应用的集群的节点分开。这些特定的节点会在出站流量上应用策略，且对这些节点的监控将更加严格。
+假设在一个安全要求比较高的组织中，所有离开服务网格的流量都要经过一个**指定的节点**(*前面的egress访问都是在离开pod之后按照k8s方式访问，并没有指定必须经过某个节点*)，这些节点会运行在指定的机器上，与运行应用的集群的节点分开。这些特定的节点会在出站流量上应用策略，且对这些节点的监控将更加严格。
 
 另外一个场景是集群中的应用所在的节点没有公网IP，因此网格内部的服务无法访问因特网。定义一个egress网关并为该网关所在的节点分配公网IP，这样流量就可以通过该节点访问公网服务。
 
@@ -450,7 +462,7 @@ $ istioctl manifest apply -f cni-annotations.yaml --set values.global.istioNames
 
 1. 上面例子中，当网格内的客户端可以直接访问外部服务，此处将会创建一个egress网关，内部流量访问外部服务时会经过该网关。创建一个`ServiceEntry`允许流量访问外部服务`edition.cnn.com`:
 
-   ```shell
+   ```yaml
    $ kubectl apply -f - <<EOF
    apiVersion: networking.istio.io/v1alpha3
    kind: ServiceEntry
@@ -481,9 +493,9 @@ $ istioctl manifest apply -f cni-annotations.yaml --set values.global.istioNames
    ...
    ```
 
-3. 为*edition.cnn.com*创建一个`Gateway`，端口80，并定义一个destination rule将流量定向到egress网关。
+3. 为`edition.cnn.com`创建一个`Gateway`，端口80，监听来自`edition.cnn.com:80`的流量。
 
-   ```shell
+   ```yaml
    $ kubectl apply -f - <<EOF
    apiVersion: networking.istio.io/v1alpha3
    kind: Gateway
@@ -493,7 +505,7 @@ $ istioctl manifest apply -f cni-annotations.yaml --set values.global.istioNames
      selector:
        istio: egressgateway
      servers:
-     - port: #接收来自edition.cnn.com:80的流量
+     - port: #监听来自edition.cnn.com:80的流量
          number: 80
          name: http
          protocol: HTTP
@@ -501,7 +513,7 @@ $ istioctl manifest apply -f cni-annotations.yaml --set values.global.istioNames
        - edition.cnn.com
    ---
    apiVersion: networking.istio.io/v1alpha3
-   kind: DestinationRule #该DestinationRule没有定义任何规则，实际可用删除该DestinationRule，并删除下面VirtualService的"subset: cnn"一行
+   kind: DestinationRule #该DestinationRule没有定义任何规则，实际可以删除该DestinationRule，并删除下面VirtualService的"subset: cnn"一行
    metadata:
      name: egressgateway-for-cnn
    spec:
@@ -513,7 +525,7 @@ $ istioctl manifest apply -f cni-annotations.yaml --set values.global.istioNames
 
 4. 定义`VirtualService`，将流量从sidecar定向到egress网关，然后将流量从egress网关定向到外部服务。
 
-   ```shell
+   ```yaml
    $ kubectl apply -f - <<EOF
    apiVersion: networking.istio.io/v1alpha3
    kind: VirtualService
@@ -522,9 +534,9 @@ $ istioctl manifest apply -f cni-annotations.yaml --set values.global.istioNames
    spec:
      hosts:
      - edition.cnn.com
-     gateways: #罗列应用路由规则的网关
+     gateways: #列出应用路由规则的网关
      - istio-egressgateway
-     - mesh #istio保留字段，表示网格中的所有sidecar，当忽略gateways字段时，默认会使用mesh，此处表示将所有sidecar到edition.cnn.com的请求
+     - mesh #istio保留字段，表示网格中的所有sidecar，当忽略gateways字段时，默认会使用mesh，此处表示所有sidecar到edition.cnn.com的请求
      http:
      - match: #各个match是OR关系
        - gateways: #处理mesh网关，将来自mesh的edition.cnn.com:80请求发往istio-egressgateway.istio-system.svc.cluster.local:80
@@ -533,17 +545,17 @@ $ istioctl manifest apply -f cni-annotations.yaml --set values.global.istioNames
        route:
        - destination:
            host: istio-egressgateway.istio-system.svc.cluster.local
-           subset: cnn #对应DestinationRule中的subset名，由于使用了subset，因此必须使用DestinationRule。删除改行后就可以不定义上面的DestinationRule
+           subset: cnn #对应DestinationRule中的subset名，由于使用了subset，因此必须使用DestinationRule。删除该行后就可以不使用上面的DestinationRule
            port:
              number: 80
          weight: 100
      - match:
        - gateways:
-         - istio-egressgateway #处理istio-egressgateway网关，将来自gateway的edition.cnn.com:80请求发往edition.cnn.com:80
+         - istio-egressgateway #处理istio-egressgateway网关，将来自gateway edition.cnn.com:80的请求发往edition.cnn.com:80
          port: 80
        route:
        - destination:
-           host: edition.cnn.com
+           host: edition.cnn.com #该host就对应serviceEntry注册的服务地址
            port:
              number: 80
          weight: 100
@@ -579,11 +591,11 @@ $ kubectl delete destinationrule egressgateway-for-cnn
 
 ### HTTPS流量的egress gateway
 
-本节展示通过egress网关定向HTTPS流量。会使用到`ServiceEntry`，一个egress `Gateway`和一个`VirtualService`。
+本节展示通过egress网关定向HTTPS流量，。会使用到`ServiceEntry`，一个egress `Gateway`和一个`VirtualService`。
 
 1. 创建到`edition.cnn.com`的`ServiceEntry`，定义外部服务https://edition.cnn.com
 
-   ```shell
+   ```yaml
    $ kubectl apply -f - <<EOF
    apiVersion: networking.istio.io/v1alpha3
    kind: ServiceEntry
@@ -595,10 +607,12 @@ $ kubectl delete destinationrule egressgateway-for-cnn
      ports:
      - number: 443
        name: tls
-       protocol: TLS
+       protocol: TLS #protocol为TLS
      resolution: DNS
    EOF
    ```
+
+   >protocol字段可以为`HTTP|HTTPS|GRPC|HTTP2|MONGO|TCP|TLS`其中之一，其中TLS 表示不会终止TLS连接，且连接会基于SNI首部进行路由。
 
 2. 校验可以通过`ServiceEntry`访问https://edition.cnn.com/politics
 
@@ -608,7 +622,77 @@ $ kubectl delete destinationrule egressgateway-for-cnn
    ...
    ```
 
-3. 为*edition.cnn.com*创建egress `Gateway`，一个destination rule和一个virtual service。与上面支持HTTP egress 网关的不同点参见下面标注的内容，其他字段相同。
+3. 为`edition.cnn.com`创建egress `Gateway`，一个destination rule和一个virtual service。
+
+   ```yaml
+   $ kubectl apply -f - <<EOF
+   apiVersion: networking.istio.io/v1alpha3
+   kind: Gateway
+   metadata:
+     name: istio-egressgateway
+   spec:
+     selector:
+       istio: egressgateway
+     servers:
+     - port:
+         number: 443
+         name: tls
+         protocol: TLS #该字段与serviceEntry的字段相同
+       hosts:
+       - edition.cnn.com
+       tls:
+         mode: PASSTHROUGH #透传模式，不在网关上终止TLS
+   ---
+   apiVersion: networking.istio.io/v1alpha3
+   kind: DestinationRule
+   metadata:
+     name: egressgateway-for-cnn
+   spec:
+     host: istio-egressgateway.istio-system.svc.cluster.local
+     subsets:
+     - name: cnn
+   ---
+   apiVersion: networking.istio.io/v1alpha3
+   kind: VirtualService
+   metadata:
+     name: direct-cnn-through-egress-gateway
+   spec:
+     hosts:
+     - edition.cnn.com
+     gateways:
+     - mesh
+     - istio-egressgateway
+     tls: #此处由http变为了tls
+     - match:
+       - gateways:
+         - mesh
+         port: 443
+         sniHosts:
+         - edition.cnn.com #基于SNI的路由
+       route:
+       - destination:
+           host: istio-egressgateway.istio-system.svc.cluster.local
+           subset: cnn
+           port:
+             number: 443
+     - match:
+       - gateways:
+         - istio-egressgateway
+         port: 443
+         sniHosts:
+         - edition.cnn.com #指定tls的SNI
+       route:
+       - destination:
+           host: edition.cnn.com
+           port:
+             number: 443
+         weight: 100
+   EOF
+   ```
+
+   > 由于TLS本身是加密的，无法像HTTP一样根据host首部字段进行路由管理，因此采用了SNI扩展。SNI位于TLS协商的client-hello阶段，作为client-hello的扩展字段存在，基于TLS SNI的路由与基于HTTP host首部字段的路由管理，在逻辑上是相同的。SNI也支持通配符模式。
+   >
+   > ![](https://img2020.cnblogs.com/blog/1334952/202008/1334952-20200825110446619-299137861.png)
 
 4. 访问https://edition.cnn.com/politics
 
@@ -637,7 +721,7 @@ $ kubectl delete destinationrule egressgateway-for-cnn
 
 ### 安全考量
 
-istio不能保证所有通过egress网关出去的流量的安全性，仅能保证通过sidecar代理的流量的安全性。如果攻击者绕过了sidecar代理，既可以不经过egress网关直接访问外部服务。此时，攻击者的行为不受istio的控制和监控。集群管理员或云供应商必须保证所有的流量都要经过egress网关。例如，集群管理员可以配置一个防火墙，拒绝所有非egress网关的流量。[Kubernetes network policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/)也可以禁止所有非egress网关的流量。此外，集群管理员或云供应商可以配置网络来保证应用节点只能通过网关访问因特网，为了实现这种效果，需要阻止将公共IP分配给网关以外的pod，并配置NAT设备丢弃非egress网关的报文。
+istio不能保证所有通过egress网关出去的流量的安全性，仅能保证通过sidecar代理的流量的安全性。如果攻击者绕过了sidecar代理，就可以不经过egress网关直接访问外部服务。此时，攻击者的行为不受istio的控制和监控。集群管理员或云供应商必须保证所有的流量都要经过egress网关。例如，集群管理员可以配置一个防火墙，拒绝所有非egress网关的流量。[Kubernetes network policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/)也可以禁止所有非egress网关的流量。此外，集群管理员或云供应商可以配置网络来保证应用节点只能通过网关访问因特网，为了实现这种效果，需要阻止将公共IP分配给网关以外的pod，并配置NAT设备丢弃非egress网关的报文。
 
 ### 使用Kubernetes network policies
 
@@ -686,7 +770,7 @@ istio不能保证所有通过egress网关出去的流量的安全性，仅能保
 
 7. 部署一个`NetworkPolicy`限制从`test-egress`命名空间到`istio-system`命名空间和`kube-system` DNS服务的egress流量：
 
-   ```shell
+   ```yaml
    $ cat <<EOF | kubectl apply -n test-egress -f -
    apiVersion: networking.k8s.io/v1
    kind: NetworkPolicy
@@ -766,7 +850,7 @@ istio不能保证所有通过egress网关出去的流量的安全性，仅能保
 
 12. 创建与`default`命名空间中相同的destination rule，将流量定向到egress网关：
 
-    ```shell
+    ```yaml
     $ kubectl apply -n test-egress -f - <<EOF
     apiVersion: networking.istio.io/v1alpha3
     kind: DestinationRule
@@ -804,6 +888,46 @@ $ kubectl label namespace istio-system istio-
 $ kubectl delete namespace test-egress
 ```
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ## 带TLS源的Egress网关
 
 本节展示如何通过配置一个egress网关来为到外部服务的流量发起TLS。
@@ -829,7 +953,7 @@ $ istioctl manifest apply -f cni-annotations.yaml --set values.global.istioNames
 
 1. 为`edition.cnn.com`定义一个`ServiceEntry`:
 
-   ```shell
+   ```yaml
    $ kubectl apply -f - <<EOF
    apiVersion: networking.istio.io/v1alpha3
    kind: ServiceEntry
@@ -870,7 +994,7 @@ $ istioctl manifest apply -f cni-annotations.yaml --set values.global.istioNames
 
 3. 为 *edition.cnn.com*创建一个`Gateway`，端口为80，以及一个destination rule，将流量定向到egress网关
 
-   ```shell
+   ```yaml
    $ kubectl apply -f - <<EOF
    apiVersion: networking.istio.io/v1alpha3 #定义Gateway
    kind: Gateway
@@ -900,7 +1024,7 @@ $ istioctl manifest apply -f cni-annotations.yaml --set values.global.istioNames
 
 4. 定义一个`VirtualService`，使流量通过egress网关，并定义一个`DestinationRule`为到 `edition.cnn.com`的请求发起TLS协商
 
-   ```shell
+   ```yaml
    $ kubectl apply -f - <<EOF
    apiVersion: networking.istio.io/v1alpha3
    kind: VirtualService
@@ -1074,7 +1198,7 @@ $ kubectl delete destinationrule egressgateway-for-cnn
    $ oc adm policy add-scc-to-user anyuid system:serviceaccount:mesh-external:default
    ```
 
-   ```shell
+   ```yaml
    $ kubectl apply -f - <<EOF
    apiVersion: v1
    kind: Service
@@ -1137,7 +1261,7 @@ $ kubectl delete destinationrule egressgateway-for-cnn
 
 6. 为`nginx.example.com`部署一个`ServiceEntry`和一个`VirtualService`将到`nginx.example.com`的流量定向到NGINX服务
 
-   ```shell
+   ```yaml
    $ kubectl apply -f - <<EOF
    apiVersion: networking.istio.io/v1alpha3
    kind: ServiceEntry #由于nginx.example.com不是已注册的服务，因此需要使用serviceEntry进行注册
@@ -1192,7 +1316,7 @@ $ kubectl delete destinationrule egressgateway-for-cnn
 
 2. 部署`sleep`应用，挂载了客户端证书和CA证书，测试发往NGINX发往的请求
 
-   ```shell
+   ```yaml
    $ kubectl apply -f - <<EOF
    # Copyright 2017 Istio Authors
    #
@@ -1395,7 +1519,7 @@ $ kubectl delete destinationrule egressgateway-for-cnn
 
    1. 为`nginx.example.com`创建`Gateway`，端口443，以及destination rule和virtual service将流量定向到egress网关，并将流量从egress网关定向到外部服务
 
-      ```shell
+      ```yaml
       $ kubectl apply -f - <<EOF
       apiVersion: networking.istio.io/v1alpha3
       kind: Gateway
@@ -1439,7 +1563,7 @@ $ kubectl delete destinationrule egressgateway-for-cnn
 
    2. 定义一个`VirtualService`使流量经过到egress网关，以及一个`DestinationRule`执行双向TLS源
 
-      ```shell
+      ```yaml
       $ kubectl apply -f - <<EOF
       apiVersion: networking.istio.io/v1alpha3
       kind: VirtualService

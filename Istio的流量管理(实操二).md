@@ -1061,11 +1061,11 @@ istio支持几种不同的Secret格式，来支持与多种工具的集成，如
 
 Gateway支持的[TLS模式](https://istio.io/latest/docs/reference/config/networking/gateway/#ServerTLSSettings-TLSmode)如下：
 
-| Name               | Description                                                  |
-| ------------------ | ------------------------------------------------------------ |
-| `PASSTHROUGH`      | The SNI string presented by the client will be used as the match criterion in a VirtualService TLS route to determine the destination service from the service registry. |
-| `SIMPLE`           | Secure connections with standard TLS semantics.              |
-| `MUTUAL`           | Secure connections to the downstream using mutual TLS by presenting server certificates for authentication. |
-| `AUTO_PASSTHROUGH` | Similar to the passthrough mode, except servers with this TLS mode do not require an associated VirtualService to map from the SNI value to service in the registry. The destination details such as the service/subset/port are encoded in the SNI value. The proxy will forward to the upstream (Envoy) cluster (a group of endpoints) specified by the SNI value. This server is typically used to provide connectivity between services in disparate L3 networks that otherwise do not have direct connectivity between their respective endpoints. Use of this mode assumes that both the source and the destination are using Istio mTLS to secure traffic. |
-| `ISTIO_MUTUAL`     | Secure connections from the downstream using mutual TLS by presenting server certificates for authentication. Compared to Mutual mode, this mode uses certificates, representing gateway workload identity, generated automatically by Istio for mTLS authentication. When this mode is used, all other fields in `TLSOptions` should be empty. |
+| Name             | Description                                                  |
+| ---------------- | ------------------------------------------------------------ |
+| PASSTHROUGH      | 客户端提供的SNI字符串将用作VirtualService TLS路由中的匹配条件，以根据服务注册表确定目标服务 |
+| SIMPLE           | 使用标准TLS语义的安全连接                                    |
+| MUTUAL           | 通过提供服务器证书进行身份验证，使用双边TLS来保护与下游的连接 |
+| AUTO_PASSTHROUGH | 与直通模式相似，不同之处在于具有此TLS模式的服务器不需要关联的VirtualService即可从SNI值映射到注册表中的服务。目标详细信息（例如服务/子集/端口）被编码在SNI值中。代理将转发到SNI值指定的上游（Envoy）群集（一组端点）。 |
+| ISTIO_MUTUAL     | 通过提供用于身份验证的服务器证书，使用相互TLS使用来自下游的安全连接 |
 
