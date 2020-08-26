@@ -211,7 +211,7 @@ istio默认会使用轮询策略，此外istio也支持如下负载均衡模型�
 
 #### Destination rule例子
 
-下面的Destination rule使用不同的负载均衡策略为`my-svc`目的服务配置了3个不同的子集(`subset`)。
+下面的Destination rule使用不同的负载均衡策略为`my-svc`目的服务配置了3个不同的子集(`subset`)。host字段给出了规则作用的istio注册表中的服务。
 
 ```yaml
 apiVersion: networking.istio.io/v1alpha3
@@ -219,7 +219,7 @@ kind: DestinationRule
 metadata:
   name: my-destination-rule
 spec:
-  host: my-svc # 流量分发的目的地，istio注册表中的服务
+  host: my-svc # 规则作用的istio注册表中的服务
   trafficPolicy:     #默认的负载均衡策略模型为随机
     loadBalancer:
       simple: RANDOM
@@ -282,7 +282,7 @@ spec:
       number: 443
       name: https
       protocol: HTTPS
-    hosts:                #外部流量
+    hosts:                #gateway暴露的主机地址
     - ext-host.example.com  
     tls:
       mode: SIMPLE

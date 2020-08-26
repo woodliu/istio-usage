@@ -372,7 +372,7 @@ TLS需要的私钥，服务端证书，根证书是使用基于文件装载的�
          number: 443
          name: https
          protocol: HTTPS
-       tls:
+       tls: #对暴露的服务使用SIMPLE模式的tls，即单向tls验证
          mode: SIMPLE
          credentialName: httpbin-credential # must be the same as secret
        hosts:
@@ -701,7 +701,7 @@ $ kubectl create -n istio-system secret generic httpbin-credential --from-file=t
         name: https
         protocol: HTTPS
       tls:
-        mode: MUTUAL #TLS模式设置为MUTUAL
+        mode: MUTUAL #对网关暴露的服务httpbin.example.com启用双向认证
         credentialName: httpbin-credential # must be the same as secret
       hosts:
       - httpbin.example.com
