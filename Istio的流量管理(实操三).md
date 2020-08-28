@@ -1,6 +1,6 @@
 # Istio的流量管理(实操三)
 
-涵盖官方文档[Traffic Management](https://istio.io/docs/tasks/traffic-management/)章节中的egress部分。
+涵盖官方文档[Traffic Management](https://istio.io/docs/tasks/traffic-management/)章节中的egress部分。其中有一小部分问题(已在下文标注)待官方解决。
 
 [TOC]
 
@@ -2229,7 +2229,7 @@ $ kubectl delete destinationrule egressgateway-for-wikipedia
 
 上一节中的配置之所以能够生效，是因为任何一个*wikipedia.org*服务端都可以服务所有的*\*.wikipedia.org*站点。然有些情况下不是这样的，例如有可能希望访问更加通用的域，如`.com`或`.org`。
 
-在istio网关上配置到任意通配符的域会带来挑战，上一节中直接将流量传递给了 *www.wikipedia.org*(直接配置到了网关上)。**受限于**[Envoy](https://www.envoyproxy.io/)(默认的istio egress网关代理)，网关并不知道接收到的请求中的任意主机的IP地址。Envoy会将流量路由到预定义的主机，预定义的IP地址或请求中的原始目的IP地址。在网关场景下，由于请求会首先被路由到egress网关上，因此会丢失请求中的原始目的IP地址，并将目的IP地址替换为网关的IP地址，最终会导致基于Envoy的istio网关无法路由到没有进行预配置的任意主机，进而导致无法为任意通配符域执行流量控制。
+在istio网关上配置到任意通配符的域会带来挑战，上一节中直接将流量传递给了 *www.wikipedia.org*(直接配置到了网关上)。受限于[Envoy](https://www.envoyproxy.io/)(默认的istio egress网关代理)，网关并不知道接收到的请求中的任意主机的IP地址。Envoy会将流量路由到**预定义的主机**，**预定义的IP地址**或**请求中的原始目的IP地址**。在网关场景下，由于请求会首先被路由到egress网关上，因此会丢失请求中的原始目的IP地址，并将目的IP地址替换为网关的IP地址，最终会导致基于Envoy的istio网关无法路由到没有进行预配置的任意主机，进而导致无法为任意通配符域执行流量控制。
 
 为了给HTTPS和TLS启用流量控制，需要额外部署一个SNI转发代理。Envoy会将到通配符域的请求路由到SNI转发代理，然后将请求转发到SNI中指定的目的地。
 
@@ -2282,6 +2282,8 @@ $ kubectl delete destinationrule egressgateway-for-wikipedia
 
 ##### 配置使用SNI代理的egress网关的路由转发
 
+....
+
 ##### 卸载
 
 ```shell
@@ -2308,5 +2310,458 @@ $ rm ./sni-proxy.conf
 
 ```shell
 $ kubectl delete -f samples/sleep/sleep.yaml
+```
+
+## Egress流量的kubernetes服务
+
+kubernetes [ExternalName](https://kubernetes.io/docs/concepts/services-networking/service/#externalname) services 和带[Endpoints](https://kubernetes.io/docs/concepts/services-networking/service/#services-without-selectors)的kubernetes services 允许为外部服务创建本地DNS别名，该DNS别名的格式与本地服务的DNS表项的格式相同，即 `<service name>.<namespace name>.svc.cluster.local`。DNS别名为工作负载提供了位置透明性：负载可以通过这种方式调用本地和外部服务。如果某个时间需要在**集群中**部署外部服务，就可以通过更新该kubernetes service来引用本地版本。工作负载将继续运行，不需要做任何改变。
+
+本任务将展示istio如何使用这些kubernetes机制来访问外部服务。不过此时必须使用TLS模式来进行访问，而不是istio的mutual TLS。因为外部服务不是istio服务网格的一部分，因此不能使用istio mutual TLS，必须根据外部服务的需要以及负载访问外部服务的方式来设置TLS模式。如果负载发起明文HTTP请求，但外部服务需要TLS，此时可能需要istio发起TLS。如果负载已经使用了TLS，那么流量已经经过加密，此时就可以禁用istio的mutual TLS。
+
+> 本节描述如何将istio集成到现有kubernetes配置中
+
+虽然本例使用了HTTP协议，但使用egress流量的kubernetes Services也可以使用其他协议。
+
+### 部署
+
+- 部署sleep应用并获取POD名称
+
+  ```shell
+  $ kubectl apply -f samples/sleep/sleep.yaml
+  $ export SOURCE_POD=$(kubectl get pod -l app=sleep -o jsonpath={.items..metadata.name})
+  ```
+
+- 创建一个不使用istio的命名空间
+
+  ```shell
+  $ kubectl create namespace without-istio
+  ```
+
+- 在`without-istio`命名空间下启用`sleep`
+
+  ```shell
+  $ kubectl apply -f samples/sleep/sleep.yaml -n without-istio
+  ```
+
+- 创建一个环境变量`SOURCE_POD_WITHOUT_ISTIO`来保存`without-istio`命名空间下的pod名称
+
+  ```shell
+  $ export SOURCE_POD_WITHOUT_ISTIO="$(kubectl get pod -n without-istio -l app=sleep -o jsonpath={.items..metadata.name})"
+  ```
+
+- 校验该pod没有istio sidecar
+
+  ```shell
+  # kubectl get pod "$SOURCE_POD_WITHOUT_ISTIO" -n without-istio
+  NAME                    READY   STATUS    RESTARTS   AGE
+  sleep-f8cbf5b76-tbptz   1/1     Running   0          53s
+  ```
+
+### 通过kubernetes ExternalName service访问外部服务
+
+1. 在`default`命名空间中为`httpbin.org`创建一个kubernetes ExternalName service，将外服服务`httpbin.org`映射为kubernetes服务`my-httpbin`，即可以通过访问`my-httpbin.default.svc.cluster.local`来访问`my-httpbin`。
+
+   ```yaml
+   $ kubectl apply -f - <<EOF
+   kind: Service
+   apiVersion: v1
+   metadata:
+     name: my-httpbin
+   spec:
+     type: ExternalName
+     externalName: httpbin.org
+     ports:
+     - name: http
+       protocol: TCP
+       port: 80
+   EOF
+   ```
+
+2. 观察service，可以看到并没有cluster IP
+
+   ```shell
+   # kubectl get svc my-httpbin
+   NAME         TYPE           CLUSTER-IP   EXTERNAL-IP   PORT(S)   AGE
+   my-httpbin   ExternalName   <none>       httpbin.org   80/TCP    3s
+   ```
+
+3. 在源pod(不带istio sidecar)中通过kubernetes的service主机名访问 `httpbin.org`。由于在网格中，因此不需要访问时禁用istio 的mutual TLS。
+
+   ```shell
+   # kubectl exec "$SOURCE_POD_WITHOUT_ISTIO" -n without-istio -c sleep -- curl my-httpbin.default.svc.cluster.local/headers
+   {
+     "headers": {
+       "Accept": "*/*",
+       "Host": "my-httpbin.default.svc.cluster.local",
+       "User-Agent": "curl/7.64.0",
+       "X-Amzn-Trace-Id": "Root=1-5f485a71-54548d2e5f8b0dc1002e2ce0"
+     }
+   }
+   ```
+
+4. 本例中，使用向 `httpbin.org` 发送了未加密的HTTP请求。为了简单例子，下面禁用了TLS模式，允许向外部服务发送未加密的流量。在实际使用时，建议配置[Egress TLS源](https://istio.io/latest/docs/tasks/traffic-management/egress/egress-tls-origination/)，下面相当于将流量重定向到内部服务`my-httpbin.default.svc.cluster.local`上，而`my-httpbin.default.svc.cluster.local`映射了外部服务 `httpbin.org`，这样就可以通过这种方式通过kubernetes service来访问外部服务。
+
+   ```yaml
+   $ kubectl apply -f - <<EOF
+   apiVersion: networking.istio.io/v1alpha3
+   kind: DestinationRule
+   metadata:
+     name: my-httpbin
+   spec:
+     host: my-httpbin.default.svc.cluster.local
+     trafficPolicy:
+       tls:
+         mode: DISABLE
+   EOF
+   ```
+
+5. 在带istio sidecar的pod中通过kubernetes service主机名访问`httpbin.org`，注意isito sidecar添加的首部，如 `X-Envoy-Decorator-Operation`。同时注意`Host`首部字段等于自己的service主机名。
+
+   ```shell
+   # kubectl exec "$SOURCE_POD" -c sleep -- curl my-httpbin.default.svc.cluster.local/headers
+   {
+     "headers": {
+       "Accept": "*/*",
+       "Content-Length": "0",
+       "Host": "my-httpbin.default.svc.cluster.local",
+       "User-Agent": "curl/7.64.0",
+       "X-Amzn-Trace-Id": "Root=1-5f485d05-ac81b19dcee92359b5cae307",
+       "X-B3-Sampled": "0",
+       "X-B3-Spanid": "bee9babd29c28cec",
+       "X-B3-Traceid": "b8260c4ba5390ed0bee9babd29c28cec",
+       "X-Envoy-Attempt-Count": "1",
+       "X-Envoy-Decorator-Operation": "my-httpbin.default.svc.cluster.local:80/*",
+       "X-Envoy-Peer-Metadata": "ChoKCkNMVVNURVJfSUQSDBoKS3ViZXJuZXRlcwo2CgxJTlNUQU5DRV9JUFMSJhokMTAuODAuMi4yNixmZTgwOjozMGI4OmI3ZmY6ZmUxNDpiMjE0Ct4BCgZMQUJFTFMS0wEq0AEKDgoDYXBwEgcaBXNsZWVwChkKDGlzdGlvLmlvL3JldhIJGgdkZWZhdWx0CiAKEXBvZC10ZW1wbGF0ZS1oYXNoEgsaCWY4Y2JmNWI3NgokChlzZWN1cml0eS5pc3Rpby5pby90bHNNb2RlEgcaBWlzdGlvCioKH3NlcnZpY2UuaXN0aW8uaW8vY2Fub25pY2FsLW5hbWUSBxoFc2xlZXAKLwojc2VydmljZS5pc3Rpby5pby9jYW5vbmljYWwtcmV2aXNpb24SCBoGbGF0ZXN0ChoKB01FU0hfSUQSDxoNY2x1c3Rlci5sb2NhbAofCgROQU1FEhcaFXNsZWVwLWY4Y2JmNWI3Ni13bjlyNwoWCglOQU1FU1BBQ0USCRoHZGVmYXVsdApJCgVPV05FUhJAGj5rdWJlcm5ldGVzOi8vYXBpcy9hcHBzL3YxL25hbWVzcGFjZXMvZGVmYXVsdC9kZXBsb3ltZW50cy9zbGVlcAoaCg9TRVJWSUNFX0FDQ09VTlQSBxoFc2xlZXAKGAoNV09SS0xPQURfTkFNRRIHGgVzbGVlcA==",
+       "X-Envoy-Peer-Metadata-Id": "sidecar~10.80.2.26~sleep-f8cbf5b76-wn9r7.default~default.svc.cluster.local"
+     }
+   }
+   ```
+
+#### 卸载
+
+```shell
+$ kubectl delete destinationrule my-httpbin
+$ kubectl delete service my-httpbin
+```
+
+### 使用带endpoints的kubernetes service访问一个外部服务
+
+1. 为`map.baidu.com`创建一个kubernetes service，不带selector
+
+   ```yaml
+   $ kubectl apply -f - <<EOF
+   kind: Service
+   apiVersion: v1
+   metadata:
+     name: my-baidu-map
+   spec:
+     ports:
+     - protocol: TCP
+       port: 443
+       name: tls
+   EOF
+   ```
+
+2. 为外部服务手动创建endpoints，IP来自`map.baidu.com`后端地址。此时可以通过kubernetes service直接访问外部服务
+
+   ```shell
+   # nslookup map.baidu.com
+   Server:         100.100.2.136
+   Address:        100.100.2.136#53
+   
+   Non-authoritative answer:
+   map.baidu.com   canonical name = map.n.shifen.com.
+   Name:   map.n.shifen.com
+   Address: 180.101.49.69
+   ```
+
+   ```shell
+   $ kubectl apply -f - <<EOF
+   kind: Endpoints
+   apiVersion: v1
+   metadata:
+     name: my-baidu-map
+   subsets:
+     - addresses:
+         - ip: 180.101.49.69
+       ports:
+         - port: 443
+           name: tls
+   EOF
+   ```
+
+3. 观测上述service，可以通过其cluster IP访问`map.baidu.com`
+
+   ```shell
+   # oc get svc my-baidu-map
+   NAME           TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE
+   my-baidu-map   ClusterIP   10.84.20.176   <none>        443/TCP   116s
+   ```
+
+4. 从不带istio sidecar的pod中向`map.baidu.com`发送HTTPS请求。注意下面`curl`在访问`map.baidu.com`时使用了`--resolve`选项
+
+   ```shell
+   # kubectl exec "$SOURCE_POD_WITHOUT_ISTIO" -n without-istio -c sleep -- curl -s --resolve map.baidu.com:443:"$(kubectl get service my-baidu-map -o jsonpath='{.spec.clusterIP}')" https://map.baidu.com | grep -o "<title>.*</title>"
+   <title>百度地图</title>
+   ```
+
+5. 这种情况下，负载会直接向`map.baidu.com`发送HTTPS请求，此时可以安全禁用istio的mutual TLS(当然也可以不禁用，此时不需要部署destinationRule)
+
+   ```yaml
+   $ kubectl apply -f - <<EOF
+   apiVersion: networking.istio.io/v1alpha3
+   kind: DestinationRule
+   metadata:
+     name: my-baidu-map
+   spec:
+     host: my-baidu-map.default.svc.cluster.local
+     trafficPolicy:
+       tls:
+         mode: DISABLE
+   EOF
+   ```
+
+6. 从带istio sidecar的pod中访问`map.baidu.com`
+
+   ```shell
+   # kubectl exec "$SOURCE_POD" -c sleep -- curl -s --resolve map.baidu.com:443:"$(kubectl get service my-baidu-map -o jsonpath='{.spec.clusterIP}')" https://map.baidu.com  | grep -o "<title>.*</title>"
+   <title>百度地图</title>
+   ```
+
+7. 校验请求确实是通过cluster IP(`10.84.20.176`)进行访问的。
+
+   ```shell
+   # kubectl exec "$SOURCE_POD" -c sleep -- curl -v --resolve map.baidu.com:443:"$(kubectl get service my-baidu-map -o jsonpath='{.spec.clusterIP}')" https://map.baidu.com -o /dev/null
+   * Expire in 0 ms for 6 (transfer 0x562c95903680)
+   * Added map.baidu.com:443:10.84.20.176 to DNS cache
+   * Hostname map.baidu.com was found in DNS cache
+   *   Trying 10.84.20.176...
+   * TCP_NODELAY set
+   ```
+
+#### 卸载
+
+```shell
+$ kubectl delete destinationrule my-baidu-map
+$ kubectl delete endpoints my-baidu-map
+$ kubectl delete service my-baidu-map
+```
+
+### 卸载
+
+```shell
+$ kubectl delete -f samples/sleep/sleep.yaml
+$ kubectl delete -f samples/sleep/sleep.yaml -n without-istio
+$ kubectl delete namespace without-istio
+$ unset SOURCE_POD SOURCE_POD_WITHOUT_ISTIO
+```
+
+## 使用外部HTTPS代理
+
+在前面[配置Egress网关](https://istio.io/latest/docs/tasks/traffic-management/egress/egress-gateway/)的例子中展示了如何通过istio边界组件*Egress网关*将流量转发到外部服务中。然而，但是，有些情况下需要外部的、遗留的（非Istio）HTTPS代理来访问外部服务。例如，公司可能已经部署了一个代理，所有组织中的应用都必须通过该代理来转发流量。
+
+本例展示如何通过外部代理转发流量。由于所有的由于都会使用HTTP CONNECT方法来与HTTPS代理建立连接，配置流量到一个外部代理不同于配置流量到外部HTTP和HTTPS服务。
+
+### 部署
+
+创建sleep应用并获取POD名称
+
+```shell
+$ kubectl apply -f samples/sleep/sleep.yaml
+$ export SOURCE_POD=$(kubectl get pod -l app=sleep -o jsonpath={.items..metadata.name})
+```
+
+### 部署一个HTTPS代理
+
+为了模拟一个遗留的代理，需要在集群中部署HTTPS代理。为了模拟在集群外部运行的更真实的代理，需要通过代理的IP地址而不是Kubernetes服务的域名来定位代理的pod。本例使用[Squid](http://www.squid-cache.org/)，但也可以使用其他HTTPS代理来支持HTTP CONNECT。
+
+1. 为HTTPS代理创建一个命名空间，不启用istio sidecar自动注入。使用这种方式来模拟集群外的代理。
+
+   ```shell
+   $ kubectl create namespace external
+   ```
+
+2. 创建Squid代理的配置文件
+
+   ```shell
+   $ cat <<EOF > ./proxy.conf
+   http_port 3128
+   
+   acl SSL_ports port 443
+   acl CONNECT method CONNECT
+   
+   http_access deny CONNECT !SSL_ports
+   http_access allow localhost manager
+   http_access deny manager
+   http_access allow all
+   
+   coredump_dir /var/spool/squid
+   EOF
+   ```
+
+3. 创建一个kubernetes ConfigMap来保存代理的配置
+
+   ```shell
+   $ kubectl create configmap proxy-configmap -n external --from-file=squid.conf=./proxy.conf
+   ```
+
+4. 部署Squid容器。注：openshift可能会因为scc导致权限错误，为方便测试，将容器设置为privileged权限
+
+   ```powershell
+   # oc adm policy add-scc-to-user privileged -z default
+   ```
+
+   ```yaml
+   $ kubectl apply -f - <<EOF
+   apiVersion: apps/v1
+   kind: Deployment
+   metadata:
+     name: squid
+     namespace: external
+   spec:
+     replicas: 1
+     selector:
+       matchLabels:
+         app: squid
+     template:
+       metadata:
+         labels:
+           app: squid
+       spec:
+         serviceAccount: default
+         volumes:
+         - name: proxy-config
+           configMap:
+             name: proxy-configmap
+         containers:
+         - name: squid
+           image: sameersbn/squid:3.5.27
+           imagePullPolicy: IfNotPresent
+           securityContext:
+             privileged: true
+           volumeMounts:
+           - name: proxy-config
+             mountPath: /etc/squid
+             readOnly: true
+   EOF
+   ```
+
+5. 在external命名空间中创建sleep应用来测试到代理的流量(不受istio控制)
+
+   ```shell
+   $ kubectl apply -n external -f samples/sleep/sleep.yaml
+   ```
+
+6. 获取代理pod的地址并定义在`PROXY_IP`环境变量中
+
+   ```shell
+   $ export PROXY_IP="$(kubectl get pod -n external -l app=squid -o jsonpath={.items..podIP})"
+   ```
+
+7. 定义`PROXY_PORT`环境变量来保存代理的端口，即Squid使用的端口3128
+
+   ```shell
+   $ export PROXY_PORT=3128
+   ```
+
+8. 从external命名空间中的sleep Pod中通过代理向外部服务发送请求：
+
+   ```shell
+   # kubectl exec "$(kubectl get pod -n external -l app=sleep -o jsonpath={.items..metadata.name})" -n external -- sh -c "HTTPS_PROXY=$PROXY_IP:$PROXY_PORT curl https://map.baidu.com" | grep -o "<title>.*</title>"
+     % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                    Dload  Upload   Total   Spent    Left  Speed
+     0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0<title>百度地图</title>
+   100  154k    0  154k    0     0   452k      0 --:--:-- --:--:-- --:--:--  452k
+   ```
+
+9. 检查代理的访问日志：
+
+   ```shell
+   # kubectl exec "$(kubectl get pod -n external -l app=squid -o jsonpath={.items..metadata.name})" -n external -- tail /var/log/squid/access.log
+   1598596320.477    342 10.80.2.81 TCP_TUNNEL/200 165939 CONNECT map.baidu.com:443 - HIER_DIRECT/180.101.49.69 -
+   ```
+
+现在，完成了如下两个于istio无关的任务：
+
+- 部署了HTTPS 代理
+- 通过代理访问`map.baidu.com`
+
+下面将配置启用istio的pod使用HTTPS代理。
+
+### 配置流量到外部HTTPS代理
+
+1. 为HTTPS代理定义一个TCP(非HTTP) Service Entry。虽然应用会使用HTTP CONNECT方法来与HTTPS代理建立连接，但必须为代理配置TCP流量，而非HTTP。一旦建立连接，代理只是充当一个TCP隧道。
+
+   ```yaml
+   $ kubectl apply -f - <<EOF
+   apiVersion: networking.istio.io/v1beta1
+   kind: ServiceEntry
+   metadata:
+     name: proxy
+   spec:
+     hosts:
+     - my-company-proxy.com # ignored
+     addresses:
+     - $PROXY_IP/32 #hosts字段的后端IP
+     ports:
+     - number: $PROXY_PORT
+       name: tcp
+       protocol: TCP
+     location: MESH_EXTERNAL
+   EOF
+   ```
+
+2. 从default命名空间中的sleep Pod发送请求，由于该pod带有sidecar，istio会对流量进行控制
+
+   ```shell
+   # kubectl exec "$SOURCE_POD" -c sleep -- sh -c "HTTPS_PROXY=$PROXY_IP:$PROXY_PORT curl https://map.baidu.com" | grep -o "<title>.*</title>"
+     % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                    Dload  Upload   Total   Spent    Left  Speed
+     0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0<title>百度地图</title>
+   100  154k    0  154k    0     0   439k      0 --:--:-- --:--:-- --:--:--  439k
+   ```
+
+3. 检查istio sidecar 代理的日志，可以看到对外访问了my-company-proxy.com
+
+   ```shell
+   # kubectl exec "$SOURCE_POD" -c sleep -- sh -c "HTTPS_PROXY=$PROXY_IP:$PROXY_PORT curl https://map.baidu.com" | grep -o "<title>.*</title>"
+   [2020-08-28T12:38:10.064Z] "- - -" 0 - "-" "-" 898 166076 354 - "-" "-" "-" "-" "10.80.2.87:3128" outbound|3128||my-company-proxy.com 10.80.2.77:36576 10.80.2.87:3128 10.80.2.77:36574 - -
+   ```
+
+4. 检查代理的访问日志，可以看到转发了HTTP CONNECT请求
+
+   ```shell
+   # kubectl exec "$(kubectl get pod -n external -l app=squid -o jsonpath={.items..metadata.name})" -n external -- tail /var/log/squid/access.log
+   1598618290.412    346 10.80.2.77 TCP_TUNNEL/200 166076 CONNECT map.baidu.com:443 - HIER_DIRECT/180.101.49.69 -
+   ```
+
+### 过程理解
+
+在本例中完成了如下步骤：
+
+1. 部署一个HTTPS代理来模拟外部代理
+2. 创建TCP service entry来使istio控制的流量转发到外部代理
+
+注意不能为需要经过外部代理的外部服务(如map.baidu.com)创建service entry。这是因为从istio的角度看，这些请求仅会发送到外部代理，Istio并不知道外部代理会进一步转发请求的事实。
+
+### 卸载
+
+```shell
+$ kubectl delete -f samples/sleep/sleep.yaml
+$ kubectl delete -f samples/sleep/sleep.yaml -n external
+```
+
+```shell
+$ kubectl delete -n external deployment squid
+$ kubectl delete -n external configmap proxy-configmap
+$ rm ./proxy.conf
+```
+
+```shell
+$ kubectl delete namespace external
+```
+
+```shell
+$ kubectl delete serviceentry proxy
 ```
 
