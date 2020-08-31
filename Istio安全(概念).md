@@ -8,7 +8,7 @@
 - 提供灵活的服务访问控制，需要用到TLS和细粒度访问策略
 - 决定哪些人在哪些时间可以做哪些事，需要用到审计工具
 
-为了解决这些问题，istio提供了完整的安全方案。本章节全面介绍了如何使用istio对服务进行安全加固(无论该服务运行在哪里)。特别地，Istio安全性可减轻来自内部和外部的(对数据，终端，通信和平台的)威胁。
+为了解决这些问题，istio提供了完整的安全方案。本章节全面介绍了如何使用istio对服务进行安全加固(无论该服务运行在哪里)。特别地，Istio的安全性可减轻来自内部和外部的(对数据，终端，通信和平台的)威胁。
 
 ![](./images/istio security.png)
 
@@ -29,16 +29,16 @@ istio的安全涉及多个组件：
   - [认证策略](https://istio.io/docs/concepts/security/#authentication-policies)
   - [授权策略](https://istio.io/docs/concepts/security/#authorization-policies)
   - [安全命名信息](https://istio.io/docs/concepts/security/#secure-naming)
-- Sidecar和外围代理充当策略执行点（[pep](https://www.jerichosystems.com/technology/glossaryterms/policy_enforcement_point.html)），确保客户端和服务器之间的通信安全。
+- Sidecar和外围代理作为策略执行点([pep](https://www.jerichosystems.com/technology/glossaryterms/policy_enforcement_point.html))来确保客户端和服务器之间的通信安全。
 - 通过一系列Envoy扩展来管理遥测和审计
 
-控制面负责接收来自API server的配置信息，并在数据面配置PEP。PEP使用Envoy实现。架构如下：
+控制面负责接收来自API server的配置信息，并在数据面配置PEP。PEP使用Envoy实现。架构如下，可以看到各个Envoy代理直接可以使用mTLS实现(默认启用ISTIO_MUTUAL)
 
 ![](./images/istio security2.png)
 
 ### Istio身份
 
-身份是所有安全设施的最基本概念。在工作负载到工作负载的通信开始时，双方必须交换携带各自身份信息的凭据来进行双向认证。客户端会将服务的身份与安全命名信息进行比对，来查看该服务是否是授权的工作负载运行器；服务端会根据[授权策略](https://istio.io/docs/concepts/security/#authorization-policies)来决定客户端可以访问的内容，审计记录谁在什么时间访问了什么内容，根据负载控制客户端的行为，以及拒绝没有支付访问的负载的客户端。
+身份是所有安全设施的最基本概念。在工作负载到工作负载的通信开始时，双方必须交换携带各自身份信息的凭据来进行双向认证。客户端会将服务的身份与[安全命名](https://istio.io/latest/docs/concepts/security/#secure-naming)信息进行比对，来查看该服务是否是授权的工作负载运行器；服务端会根据[授权策略](https://istio.io/docs/concepts/security/#authorization-policies)来决定客户端可以访问的内容，审计记录谁在什么时间访问了什么内容，根据负载控制客户端的行为，以及拒绝没有支付被访问负载的客户端。
 
 istio身份模型使用一级服务标识(`service identity` )来确定请求源的身份。该模型使用更大的灵活性和颗粒度来标识一个用户，单独的负载，或一组负载。在没有服务标识的平台上，isito可以使用其他标识来对负载实例进行分组，如服务名称。
 
@@ -52,7 +52,7 @@ istio身份模型使用一级服务标识(`service identity` )来确定请求源
 
 ### 身份和证书管理
 
-istio安全使用X.509证书为每个负载提高了强身份信息。每个Envoy代理旁都会运行一个istio agent，istio agent与`istiod`配合，可以在扩展时实现证书的自动滚动。下面展示了证书配置流程：
+istio的安全使用X.509证书为每个负载提高了强身份标识。每个Envoy代理旁都会运行一个istio agent，istio agent与`istiod`配合，可以在扩展时实现证书的自动滚动。下面展示了证书配置流程：
 
 ![](./images/istio security3.png)
 
@@ -69,49 +69,49 @@ isito通过secert发现(SDS)机制来处理身份认证，处理过程为：
 
 isito提供两种类型的认证：
 
-- 对等体认证：用于服务到服务的身份验证，验证建立连接的客户端。Istio提供了mutual TLS作为传输身份验证的全栈解决方案，这种方式无需修改服务代码，该方案：
+- [对等认证](https://istio.io/latest/docs/reference/config/security/peer_authentication/)：用于服务到服务的身份验证，验证建立连接的客户端。Istio提供了mutual TLS作为传输身份验证的全栈解决方案，这种方式无需修改服务代码，该方案：
   - 为每个服务提供了强标识作为角色(role)，支持跨集群和云的互操作性。
   - 确保服务到服务的通信安全。
   - 提供了密钥管理系统来自动生成，分发，滚动密钥和证书。
-- 请求认证：用于终端用户认证，校验请求中的凭据。Istio请求级认证使用了JSON Web Token(JWT)验证，以及基于自定义身份验证或OpenID Connect开发的程序，如：
+- [请求认证](https://istio.io/latest/docs/reference/config/security/request_authentication/)：用于终端用户认证，校验请求中的凭据。Istio请求级认证使用了JSON Web Token(JWT)验证，以及基于自定义身份验证或OpenID Connect开发的程序，如：
   - [ORY Hydra](https://www.ory.sh/)
   - [Keycloak](https://www.keycloak.org/)
   - [Auth0](https://auth0.com/)
   - [Firebase Auth](https://firebase.google.com/docs/auth/)
   - [Google Auth](https://developers.google.com/identity/protocols/OpenIDConnect)
 
-在所有场景中，istio通过一个用户自定义的Kubernetes API将认证策略保存在`Istio config store` 中。istiod会将这些策略更新到每个代理中，并提供合适的密钥。此外，istio支持宽容模式下的身份验证，可以帮助理解一个策略在强制执行前如何影响安全状态。
+在所有场景中，istio通过一个用户自定义的Kubernetes API将认证策略保存在`Istio config store` 中。istiod会将这些策略更新到每个代理中，并提供合适的密钥。此外，istio支持permissive 模式的身份验证，可以帮助理解一个策略在强制执行前如何影响安全状态。
 
 #### Mutial TLS认证
 
-Istio通过客户端和服务器端的PEP实现服务到服务的通信，PEP作为[Envoy代理](https://www.envoyproxy.io/docs/envoy/latest/)来实现。当一个负载使用mutual TLS认证向另一个负载发送请求时，该请求的处理流程如下：
+Istio通过客户端和服务器端的PEP实现服务到服务的通信，PEP使用[Envoy代理](https://www.envoyproxy.io/docs/envoy/latest/)来实现。当一个负载使用mutual TLS认证向另一个负载发送请求时，该请求的处理流程如下：
 
 1. isito将出站流量从客户端重路由到客户端的本地sidecar Envoy中
 2. 客户端侧的Envoy与服务端侧的Envoy开始双向TLS握手。在握手期间，客户端侧的Envoy也会进行[安全命名](https://istio.io/docs/concepts/security/#secure-naming)校验，确保可以通过授权服务端证书中的service account来执行目标服务。
 3. 客户端侧的Envoy和服务端侧的Envoy建立双向TLS连接，istio会将流量从客户端的Envoy转发到服务端侧的Envoy
 4. 在授权后，服务端测的Envoy会通过本地TCP连接将流量转发到服务端的服务中。
 
-##### 宽容模式
+##### 宽容(Permissive)模式
 
 istio mutual TLS有一个宽容模式，它允许一个服务同时接收明文流量和TLS加密的流量。该特性极大提升了mutual TLS的使用体验。
 
-在很多非istio的客户端和非istio的服务端架构中，当计划将服务端迁移到启用mutual TLS的istio上时都会遇到问题。通常，操作人员不能同时给所有的客户端安装一个sidecar，或没有权限这么做。即使在所有的服务端安装istio sidecar后，操作人员仍然无法在不中断现有连接的情况下启用mutual TLS。
+在很多非istio的客户端和非istio的服务端架构中，当计划将服务端迁移到启用mutual TLS的istio上时都会遇到问题。通常，操作人员无法同时给所有的客户端安装一个sidecar，或没有权限这么做。即使在所有的服务端安装istio sidecar后，操作人员仍然无法在不中断现有连接的情况下启用mutual TLS。
 
 使用宽容模式时，服务端可以同时接收明文和mutual TLS的流量。该模式极大提升了使用istio的灵活性。服务端在安装istio sidecar后，也可以在不中断现有明文流量的情况下接收mutual TLS流量。这样，就可以通过逐步安装并配置客户端的istio sidecar来发送mutual TLS流量。一旦完成客户端的配置，操作人员就可以将服务端配置为仅mutual TLS模式。更多信息，参见[mutual TLS迁移指南](https://istio.io/docs/tasks/security/authentication/mtls-migration/)。
 
 ##### 安全命名
 
-服务的凭据编码到了证书中，但服务名称是通过发现服务或DNS检索的。安全命名信息将服务的身份信息映射到服务名称上。一个身份`A`映射到服务名称`B`，表示授权`A`运行服务`B`。控制面会监视`apiserver`，生成安全命名映射，并将其安全地分发到PEP上。下面解释安全命名为什么对认证至关重要。
+服务的凭据编码到了证书中，但服务名称是通过发现服务或DNS进行检索的。安全命名信息将服务的身份信息映射到服务名称上。一个身份`A`映射到服务名称`B`，表示授权`A`运行服务`B`。控制面会通过watch `apiserver`来生成安全命名映射，并将其安全地分发到PEP上。下面解释安全命名为什么对认证至关重要。
 
-假设合法的服务器运行了服务`datastore`，且仅使用了`infra-team`身份。一个恶意的用户使用了`test-team`身份的证书和密钥，该用户尝试冒充服务来分析来自客户端的数据。该恶意用户使用test-team身份的证书和密钥部署了一个伪造的服务器。假设该恶意用户成功劫持(通过DNS欺骗，BGP/路由劫持，ARP欺骗等)了发往`datastore`的流量，并将流量重定向到伪造的服务。
+假设合法的服务器运行了服务`datastore`，且仅使用了`infra-team`身份。一个恶意的用户使用了`test-team`身份的证书和密钥，该用户尝试冒充服务来分析来自客户端的数据。该恶意用户使用`test-team`身份的证书和密钥部署了一个伪造的服务器。假设该恶意用户成功劫持(通过DNS欺骗，BGP/路由劫持，ARP欺骗等)了发往`datastore`的流量，并将流量重定向到伪造的服务。
 
-当一个客户端调用`datastore`服务时，它会从服务的证书中抽取出`test-team`身份，然后使用安全命名信息校验`test-team`是否允许允许`datastore`，此时客户端会探测到`test-team`不允许`datastore`服务，认证失败。
+当一个客户端调用`datastore`服务时，它会从服务的证书中抽取出`test-team`身份，然后使用安全命名信息校验`test-team`是否允许运行`datastore`，此时客户端会探测到`test-team`不允许`datastore`服务，认证失败。
 
-安全命名能够防止HTTPS流量被网络劫持，也能够防止TLS流量被网络劫持。然而，安全命名无法防止DNS欺骗，因为这种情况下，攻击者会劫持DNS并修改目的地的IP地址，而TCP流量不包含主机信息，仅能依赖IP地址进行路由。事实上，这种DNS劫持甚至在客户端的Envoy收到流量之前就有可能发生。
+安全命名能够防止HTTPS流量被网络劫持，也能够防止TCP流量被网络劫持。但安全命名无法防止DNS欺骗，因为这种情况下，攻击者会劫持DNS并修改目的地的IP地址，而TCP流量不包含主机信息，仅能依赖IP地址进行路由。事实上，这种DNS劫持甚至在客户端的Envoy收到流量之前就有可能发生。
 
 #### 认证架构
 
-可以使用对等和请求身份认证策略为在Istio网格中接收请求的工作负载指定身份认证。网格操作人员可以使用`.yaml`文件指定策略。一旦部署后，会将策略保存在istio的配置存储中。isito控制器会监视配置存储。
+可以使用对等和请求认证策略为在Istio网格中接收请求的工作负载指定身份认证。网格操作人员可以使用`.yaml`文件指定策略。一旦部署后，会将策略保存在istio的配置存储中。isito控制器会监视配置存储。
 
 当策略变更后，新的策略会转变为合适的配置，告诉PEP如何执行需要的认证机制。控制平面可能会拉取公钥，并将其添加到配置中，用于JWT校验。或者，isito会提供istio系统管理的密钥和证书的路径，并将它们安装到应用pod中，用于mutual TLS。更多参见[身份和证书管理](https://istio.io/docs/concepts/security/#pki)。
 
@@ -127,7 +127,9 @@ istio会使用上述两种认证方式，以及凭证中声明的其他信息（
 
 本节展示了istio认证策略的工作细节。身份认证策略应用于服务接收的请求，为了在mutual TLS中给指定客户端侧的认证规则，需要在`DestinationRule`中指定`TLSSettings`，更多参见[TLS设置文档](https://istio.io/docs/reference/config/networking/destination-rule/#ClientTLSSettings)。
 
-与其他istio配置类似，可以在`.yaml`文件中指定配置策略，使用`kubectl`部署。下面的认证策略指定了带`app:reviews`标签的负载的传输认证必须使用mutual TLS。
+与其他istio配置类似，可以在`.yaml`文件中指定配置策略，并使用`kubectl`部署。下面的认证策略指定了带`app:reviews`标签的负载的传输认证必须使用mutual TLS。
+
+> `DestinationRule`中设置使用哪种类型的TLS：DISABLE|SIMPLE|MUTUAL|ISTIO_MUTUAL，然后在单独的[资源](https://istio.io/latest/docs/reference/config/security/)中指定具体的认证和授权策略。
 
 ```yaml
 apiVersion: "security.istio.io/v1beta1"
@@ -142,6 +144,15 @@ spec:
   mtls:
     mode: STRICT
 ```
+
+> mtls的模式如下：
+>
+> | Name         | Description                                                  |
+> | ------------ | ------------------------------------------------------------ |
+> | `UNSET`      | Inherit from parent, if has one. Otherwise treated as PERMISSIVE. |
+> | `DISABLE`    | Connection is not tunneled.                                  |
+> | `PERMISSIVE` | Connection can be either plaintext or mTLS tunnel.           |
+> | `STRICT`     | Connection is an mTLS tunnel (TLS with client cert must be presented). |
 
 ##### 策略存储
 
@@ -165,7 +176,7 @@ selector:
 - 命名空间范围策略：特定的非根命名空间中的策略，不使用`selector`字段或使用空的`selector`字段
 - 指定负载策略：定义在常规命名空间中的策略，使用非空的`selector`字段
 
-对等和请求认证策略遵循`selector`字段的同级原则，但Istio会以稍微不同的方式组合和应用它们。
+对等方和请求身份验证策略对`selector`字段遵循相同的层次结构原则，但Istio会以稍微不同的方式组合和应用它们。
 
 只能存在一个网格范围的对等认证策略，每个命名空间中只能存在一个命名空间范围的对等认证策略。在相同的网格或命名空间中配置多网格范围或多命名空间范围的对等认证策略时，istio或忽略新添加的策略。当匹配到多个指定负载的对等认证策略时，istio会选择最老的一条。
 
@@ -175,7 +186,7 @@ Istio按照以下顺序为每个工作负载指定应用范围最小的匹配策
 2. 命名空间范围
 3. 网格范围
 
-Istio可以将所有匹配的请求身份认证策略组合起来，就如同这些策略来自单个请求身份认证策略一样。因此，可以在一个网格或命名空间中存在多个网格范围或命名空间范围的策略。但是，最好避免存在多个网格范围或命名空间范围的请求认证策略。
+Istio可以将所有匹配的请求身份认证策略组合起来，就如同这些策略为单个请求身份认证策略一样。因此，可以在一个网格或命名空间中存在多个网格范围或命名空间范围的策略。但是，最好避免存在多个网格范围或命名空间范围的请求认证策略。
 
 ##### 对等认证
 
@@ -200,7 +211,7 @@ spec:
     mode: STRICT
 ```
 
-使用指定负载的对等认证策略时，可以为不同的端口指定不同的mutual TLS模式。下例中，禁止在 `app:example-app` 负载的`80`端口上使用mutual TLS，非80端口使用命名空间范围的对等认证策略。
+使用指定负载的对等认证策略时，可以为不同的端口指定不同的mutual TLS模式。下例中，禁止在 `app:example-app` 负载的`80`端口上使用mutual TLS，而其他端口使用命名空间范围的对等认证策略。
 
 ```yaml
 apiVersion: "security.istio.io/v1beta1"
@@ -216,6 +227,8 @@ spec:
     80:
       mode: DISABLE
 ```
+
+> portLevelMtls可以对不同的端口应用不同的认证策略
 
 下面的service配置将来自负载`example-app`的请求绑定到`example-service`的80端口，只有这样，上述的对等认证策略才能运行。
 
@@ -237,15 +250,15 @@ spec:
 
 ##### 请求认证
 
-请求认证策略指定了校验JWT的值。这些值包括：
+请求认证策略指定了校验JSON Web Token (JWT)的值。这些值包括：
 
 - 请求中的token的位置
 - 发起者或请求
-- 公共的JWKS(JSON Web Key Set)
+- 公共的JSON Web Key Set (JWKS)
 
-istio校验出现的token，如果违反请求身份认证策略中的规则，则视为无效的token，拒绝该请求。如果请求中没有携带token，默认情况下会接受这些请求。为了拒绝不带token的请求，需要通过认证规则限制特定的操作，例如路径或动作。
+istio校验出现的token，如果违反请求身份认证策略中的规则，则视为无效的token，拒绝该请求。如果请求中没有携带token，默认情况下会接受这些请求。为了拒绝不带token的请求，需要通过认证规则(例如路径或动作)限制特定的操作。
 
-如果每个请求身份认证策略使用一个唯一的位置，则可以指定多个JWT。当多个策略匹配到一个负载时，istio会将所有的规则结合起来(就像一个独立的策略一样)。这种方式对于编写可以接受来自不同提供者的JWT的工作负载非常有用。然而，无法支持具有多个JWT的请求，因为未定义这类请求的输出主体。
+如果每个请求身份认证策略使用唯一的位置，则可以指定多个JWT。当多个策略匹配到一个负载时，istio会将所有的规则结合起来(就像一个独立的策略一样)。这种方式对于编写可以接受来自不同提供方的JWT的工作负载来说非常有用。然而，无法支持具有多个JWT的请求，因为未定义这类请求的输出主体。
 
 ##### 主体(Principals)
 
@@ -255,7 +268,7 @@ istio校验出现的token，如果违反请求身份认证策略中的规则，�
 
 可以在任何时候修改认证策略，isito会将新的策略实时推送到负载上。然而，isito不能保证所有的负载在同一时间接收到新的策略。以下实现帮助避免在更新认证策略时导致的混乱：
 
-- 使用中间对等身份认证策略，在将模式从`DISABLE` 切换到`STRICT`时使用`PERMISSIVE`模式，反之亦然。当所有的负载切换到期望的模式后，可以将策略修改为最终的模式。可以使用isito的遥测校验负载是否切换成功。
+- 在将模式从`DISABLE` 切换到`STRICT`时，中间对等身份认证策略使用`PERMISSIVE`模式，反之亦然。当所有的负载切换到期望的模式后，可以将策略修改为最终的模式。可以使用isito的遥测校验负载是否切换成功。
 - 当请求认证策略从JTW切换到另一个JWT时，将新的JWT的规则添加到策略中，而不删除旧的规则。此时负载会接受两个类型的JWT，当所有的流量切换到新的JWT时，就可以移除老的规则。然而，每个JWT都需要使用不同的位置。
 
 ### 授权
@@ -276,9 +289,9 @@ istio的授权特性提供了网格，命名空间和负载范围内的访问控
 
 #### 隐式启用
 
-无需明确启用istio的授权特性。只需要将授权策略应用到负载来强制使用访问控制即可。对于没有应用授权策略的负载，istio不会强制允许所有请求的访问控制。
+无需明确启用istio的授权特性。只需将授权策略应用于工作负载即可执行访问控制。对于未应用授权策略的工作负载，Istio不会执行允许所有请求的访问控制。
 
-授权策略支持`ALLOW`和`DENY`，拒绝策略优先允许策略。如果允许策略应用到一个负载，则对该负载的访问默认是拒绝的，除非明确在策略规则中允许该访问。当一个负载上应用了而多个授权策略，则istio会叠加这些策略。
+授权策略支持`ALLOW`和`DENY`，deny 策略优先allow 策略。如果allow 策略应用到一个负载，则对该负载的访问默认是deny 的，除非明确在策略规则中允许该访问。当一个负载上应用了而多个授权策略，则istio会叠加这些策略。
 
 #### 授权策略
 
@@ -287,7 +300,7 @@ istio的授权特性提供了网格，命名空间和负载范围内的访问控
 - `selector`字段指定了策略的目标
 - `action`字段指定了是否允许或拒绝请求。
 - `rules`指定了何时触发`action`
-  - `rules`中的`from`字段指定了请求的来源
+  - `rules`中的`from`字段指定了请求源
   - `rules`中的`to`字段指定了请求的操作
   - `when`字段指定了应用规则的条件
 
@@ -295,7 +308,7 @@ istio的授权特性提供了网格，命名空间和负载范围内的访问控
 
 ```yaml
 apiVersion: security.istio.io/v1beta1
-kind: AuthorizationPolicy
+kind: AuthorizationPolicy #授权策略资源
 metadata:
  name: httpbin
  namespace: foo
@@ -319,7 +332,7 @@ spec:
      values: ["https://accounts.google.com"]
 ```
 
-下例中展示拒绝来自该非`foo`命名空间的source的请求授权策略。
+下例的授权策略拒绝来自非`foo`命名空间的source的请求。
 
 ```yaml
 apiVersion: security.istio.io/v1beta1
@@ -339,7 +352,7 @@ spec:
        notNamespaces: ["foo"]
 ```
 
-拒绝策略优先于允许策略。如果匹配了一个deny策略，即使匹配到allow策略，此时也应该拒绝该请求。isito会首先评估deny策略，保证allow策略不会绕过deny策略。
+**拒绝策略优先于允许策略**。如果匹配了一个deny策略，即使匹配到allow策略，此时也应该拒绝该请求。isito会首先评估deny策略，保证allow策略不会绕过deny策略。
 
 ##### 策略目标
 
@@ -347,7 +360,7 @@ spec:
 
 可以使用`selector`字段进一步限制策略应用的负载。`selector`使用标签来选择目标负载。`selector`包含一些列`{key: value}` 对，`key`为标签的名称。如果没有设置，授权策略会应用到相同命名空间中的所有负载上。
 
-例如，`allow-read`策略允许`"GET"` 和`"HEAD"` 访问`default`命名空间中带有`app: products` 标签的负载。
+例如，`allow-read`策略允许使用`"GET"` 和`"HEAD"` 访问`default`命名空间中带有`app: products` 标签的负载。
 
 ```yaml
 apiVersion: security.istio.io/v1beta1
@@ -373,7 +386,7 @@ spec:
 - 完全匹配：字符串完全匹配。
 - 前缀匹配：使用"\*"结尾的字符串。例如 `"test.abc.*"` 匹配`"test.abc.com"`, `"test.abc.com.cn"`, `"test.abc.org"`等。
 - 后缀匹配：使用"\*"开头的字符串。例如 `"*.abc.com"` 匹配`"eng.abc.com"`, `"test.eng.abc.com"`等。
-- 存在匹配：使用`*`指定非空的字符串。 可以使用 `fieldname: ["*"]`指定给一个必须存在的字段。这不同于未指定字段，未指定字段可以匹配任何内容，包括空的。
+- 存在匹配：使用`*`指定非空的字符串。 可以使用 `fieldname: ["*"]`格式指定一个必须存在的字段，不同于未指定字段，未指定字段可以匹配任何内容，包括空的。
 
 这里有一些例外，如以下字段仅支持完全匹配：
 
@@ -476,7 +489,7 @@ spec:
 
 ##### 自定义条件
 
-可以在`when`部分指定其他条件。例如，如下`AuthorizationPolicy`定义包含一个条件，即 `request.headers[version]` 为`"v1"` 或 `"v2"`。这种情况下，key为`request.headers[version]`，属于`istiorequest.headers`属性中的一项。
+可以在`when`部分指定其他条件。例如，如下`AuthorizationPolicy`定义包含一个条件，即 `request.headers[version]` 为`"v1"` 或 `"v2"`。这种情况下，key为`request.headers[version]`，属于istio `request.headers`属性中的一项，类型为map。
 
 ```yaml
 apiVersion: security.istio.io/v1beta1
@@ -551,12 +564,12 @@ spec:
 
 ##### 使用istio授权普通TCP协议
 
-isito授权支持负载使用普通TCP协议，如MongoDB。这种情况下的授权策略的配置与HTTP负载相同，不同之处在于，某些字段和条件仅适用于HTTP工作负载，这些字段包括：
+isito授权支持负载使用普通TCP协议，如MongoDB。这种情况下的授权策略的配置与HTTP负载相同，不同之处在于，特定的字段和条件仅适用于HTTP工作负载，这些字段包括：
 
 - 授权策略对象的`source`部分的`request_principals` 字段
 - 授权策略对象的`operation`部分的`hosts`, `methods` 和`paths` 字段
 
-支持的条件参见[官方文档](https://istio.io/docs/reference/config/security/conditions/)。如果TCP负载中使用了任何仅HTTP格式的字段，istio会在授权策略中忽略这些仅HTTP格式的字段。
+支持的条件参见[官方文档](https://istio.io/docs/reference/config/security/conditions/)。如果TCP负载中使用了任何仅HTTP支持的字段，则istio会在授权策略中忽略这些仅HTTP格式的字段。
 
 假设一个MongoDB服务的端口为`27017`，下例配置了一个授权策略，仅允许istio网格中的`bookinfo-ratings-v2` 服务访问MongoDB负载。
 
@@ -590,4 +603,4 @@ Istio使用mutual TLS将信息从客户端安全地传递到服务器。必须�
 - `source.namespace` 自定义条件
 -  `connection.sni`自定义条件
 
-如果授权策略中没有使用了上述任何一个字段，则不需要mutual TLS。
+如果授权策略中没有使用上述任何一个字段，则不需要mutual TLS。

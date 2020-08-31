@@ -478,7 +478,7 @@ $ istioctl manifest generate --revision=canary >canary.yaml
 
 #### 替换升级
 
-> 升级过程中可能会造成流量中断，为了最小化影响，需要确保istio中的各个组件(除Citadel)至少有两个副本正在运行，此外需要通过[PodDistruptionBudgets](https://kubernetes.io/docs/tasks/run-application/configure-pdb/)保证至少有一个可用的pod
+> 升级过程中可能会造成流量中断，为了最小化影响，需要确保istio中的各个组件(除Citadel)至少有两个副本正在运行，此外需要通过[PodDistruptionBudgets](https://kubernetes.io/docs/tasks/run-application/configure-pdb/)保证至少有一个可用的pod。
 
 - 首先下载最新的istio
 
