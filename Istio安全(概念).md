@@ -129,7 +129,7 @@ istio会使用上述两种认证方式，以及凭证中声明的其他信息（
 
 与其他istio配置类似，可以在`.yaml`文件中指定配置策略，并使用`kubectl`部署。下面的认证策略指定了带`app:reviews`标签的负载的传输认证必须使用mutual TLS。
 
-> `DestinationRule`中设置使用哪种类型的TLS：DISABLE|SIMPLE|MUTUAL|ISTIO_MUTUAL，然后在单独的[资源](https://istio.io/latest/docs/reference/config/security/)中指定具体的认证和授权策略。
+> `DestinationRule`中设置使用哪种类型的TLS：DISABLE|SIMPLE|MUTUAL|ISTIO_MUTUAL，然后在单独的[资源](https://istio.io/latest/docs/reference/config/security/)中指定具体的认证和授权策略(当然也可以单独使用认证和授权策略)。
 
 ```yaml
 apiVersion: "security.istio.io/v1beta1"
@@ -263,6 +263,8 @@ istio校验出现的token，如果违反请求身份认证策略中的规则，�
 ##### 主体(Principals)
 
 当使用对等认证策略和mutual TLS时，istio会从对等认证中抽取身份信息，并保存到`source.principal`中。类似地，当使用请求认证策略时，istio会将JWT的身份信息分配到 `request.auth.principal`中。isito使用这些主体设置认证策略和遥测输出。
+
+> 对于mutual TLS来说主体为k8s的service account；对于请求认证来说，主体为使用分隔符组合起来的JWT token的`iss`和`sub` claim。参见[source](https://istio.io/latest/docs/reference/config/security/authorization-policy/#Source)
 
 #### 升级认证策略
 

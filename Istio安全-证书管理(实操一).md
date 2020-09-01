@@ -16,7 +16,7 @@
 
 这些文件位于`samples/certs/`目录。
 
-> 默认的istio CA安装根据如下命令(如名为`cacerts`的secret，名为`root-cert.pem文`件中的根证书，`ca-key.pem`文件中的istio CA等)预先定义的密钥和文件名，必须使用这些指定的secret和文件名，或在部署istio的时候重新配置istio的CA。
+> 默认的istio CA安装根据如下命令(如名为`cacerts`的secret，名为`root-cert.pem文`件中的根证书，`ca-key.pem`文件中的istio CA等)预先定义的密钥和文件名来配置证书和密钥的位置，必须使用这些指定的secret和文件名，或在部署istio的时候重新配置istio的CA。
 
 下面步骤将证书和密钥插入kubernetes的secret中，后续会被istio的CA读取：
 
@@ -115,7 +115,7 @@ $ kubectl delete ns foo istio-system
 本节展示如何使用 [Chiron](https://istio.io/latest/blog/2019/dns-cert/)提供和管理DNS证书，Chiron是一个与istiod相连的轻量型组件，它使用kubernetes的CA API签发证书，无需管理私钥。有如下优势：
 
 - 与isitod不同，这种方式无需维护签发的私钥，增强了安全性
-- 简化了将根证书分发到TLS客户端。客户端不再需要等到istiod生成并分发其CA证书
+- 简化了将根证书分发到TLS客户端。客户端不再需要等待istiod生成并分发其CA证书
 
 首先使用istioctl安装istio，并配置DNS证书，当istiod启动后会读取该配置
 
