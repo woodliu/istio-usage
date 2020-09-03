@@ -184,23 +184,323 @@ public Response bookReviewsById(@PathParam("productId") int productId, @Context 
 
 ### 访问Jaeger
 
+上面部署的Jaeger对应的k8s service名为`tracing`，查看该service，可以看到容器和service暴露的端口均为16686。
 
+```shell
+# oc describe svc tracing
+Name:              tracing
+Namespace:         istio-system
+Labels:            app=jaeger
+Annotations:       kubectl.kubernetes.io/last-applied-configuration:
+                     {"apiVersion":"v1","kind":"Service","metadata":{"annotations":{},"labels":{"app":"jaeger"},"name":"tracing","namespace":"istio-system"},"s...
+Selector:          app=jaeger
+Type:              ClusterIP
+IP:                10.84.179.208
+Port:              http-query  80/TCP
+TargetPort:        16686/TCP
+Endpoints:         10.80.2.226:16686
+Session Affinity:  None
+Events:            <none>
+```
 
+在openshift上创建一个route(ingress)，即可访问该Jaeger。
 
+### 使用Boofinfo生成traces
 
+1. 在浏览器上多次访问`http://$GATEWAY_URL/productpage`来生成跟踪信息
 
+   为了查看跟踪数据，需要服务发送请求。请求的数量取决于istio的采样率，采样率是在安装istio的时候设置的，默认为1%，即在看到第一个trace之前需要至少发送100个请求。使用如下命令向productpage发送100个请求：
 
+   ```shell
+   $ for i in $(seq 1 100); do curl -s -o /dev/null "http://$GATEWAY_URL/productpage"; done
+   ```
 
+2. 在dashboard的左边，在**Service**下拉列表中选择`productpage.default`，并点击**Find Traces**，可以看到生成了两条span
 
+   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200902140220198-57119483.png)
 
+3. 点击最近时间内到`/productpage`的请求的细节
+
+   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200902140635859-538449695.png)
+
+   此外还可以点击右上角的**Alternate Views**切换视图，可以更直观地看到请求的访问情况：
+
+   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200902141306718-1690436740.png)
+
+4. trace由一组span构成，每个span对应一个Bookinfo服务，在执行到`/productpage`的请求或内部Istio组件(如`istio-ingressgateway`)时生成。
 
 ## Kiali
 
+本节展示如何可视化istio网格的方方面面。
 
+本节将安装Kiali插件并使用基于Web的图形用户界面查看网格和Istio配置对象的服务图，最后，使用Kiali Developer API以consumable  JSON的形式生成图形数据。
 
+> 本任务并没有涵盖Kiali的所有特性，更多参见[Kiali website](http://kiali.io/documentation/latest/features/)。
 
+本节将使用Boofinfo应用。
 
+### 部署
 
+Kiali依赖Prometheus，因此首先要部署Prometheus。使用如下命令快速部署一个用于演示的Prometheus：
 
+```shell
+$ kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.7/samples/addons/prometheus.yaml
+```
 
+使用如下方式快速部署一个用于演示的Kiali。如果要用于生产环境，建议参考[quick start guide](https://kiali.io/documentation/latest/quick-start) 和[customizable installation methods](https://kiali.io/documentation/latest/installation-guide)。
+
+```shell
+$ kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.7/samples/addons/kiali.yaml
+```
+
+> 注：由于Kiali依赖Prometheus，因此需要将Kiali和Prometheus关联起来。修改上面kiali.yaml中的如下字段，然后部署即可：
+>
+>         custom_metrics_url: http://prometheus.istio-system.svc.cluster.local:9090
+>         url: http://prometheus.istio-system.svc.cluster.local:9090
+
+同样地，为名为`kiali`的k8s service创建一个`route`即可访问，端口为20001。
+
+### 生成服务图
+
+1. 使用如下命令检查kiali的service
+
+   ```shell
+   $ kubectl -n istio-system get svc kiali
+   ```
+
+2. 可以使用如下三种方式向网格发送流量
+
+   - 通过浏览器访问`http://$GATEWAY_URL/productpage`
+
+   - 使用如下`curl`命令
+
+     ```shell
+     $ curl http://$GATEWAY_URL/productpage
+     ```
+
+   - 使用`watch`持续访问
+
+     ```shell
+     $ watch -n 1 curl -o /dev/null -s -w %{http_code} $GATEWAY_URL/productpage
+     ```
+
+3. 在**Overview**页面浏览网格概况，该页面展示了网格中所有命名空间下的服务。可以看到default命名空间下有流量(Bookinfo应用安装到的default命名空间下)
+
+   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200902150532409-2091806055.png)
+
+4. 为了查看一个命名空间的图表，在Boofinfo所在的命名空间中查看`bookinfo`的图表如下，三角形表示service，方形表示app
+
+   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200902153528382-123854955.png)
+
+5. 可以在`Display`中选择不同的Edge来展示metrics的概况，如上图显示了`Response Time`。unknow是因为没有走istio的gateway，而使用了openshift的route
+
+6. 为了显示服务网格中的不同类型的图表，在**Graph Type**下拉框中可以选择如下图标类型：**App**, **Versioned App**, **Workload**, **Service**
+
+   - **App**图表类型会将所有版本的app聚合为一个图表节点。下图可以看到，它使用一个**reviews** 节点来表示三个版本的reviews app
+
+     ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200902154203683-1218800621.png)
+
+   - **Versioned App**图表类型使用一个node展示了不同版本的app，同时对特定app的不同版本进行分组。下图展示了**reviews** 组，其包含3个小的节点，三个节点表示三个版本的reviews app
+
+     ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200902154852134-1507554673.png)
+
+   - **Workload** 图表类型使用节点展示了服务网格中的每个负载。该图形类型不要求使用`app` 和`version`标签，因此如果选择不在组件上使用这些标签时，就可以使用该图表类型。
+
+     ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200902155313503-75060219.png)
+
+   - **Service** 图表类型使用节点展示网格中的每个服务，但排除所有应用程序和工作负载
+
+     ![image-20200902155441754](C:\Users\liuchanglin\AppData\Roaming\Typora\typora-user-images\image-20200902155441754.png)
+
+### 检查Istio配置
+
+为了查看Istio配置的详细配置，可以在左边菜单栏中点击 **Applications**, **Workloads**和**Services**。下图展示了Bookinfo应用的信息
+
+![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200902170259187-1847515499.png)
+
+### 创建加权路由
+
+可以使用Kiali加权路由向导来定义指定百分比的请求流量来路由到两个或更多负载。
+
+1. 将bookinfo图表切换为**Versioned app graph**
+
+   - 确保在**Display**下拉框中选择了**Requests percentage**来查看路由到每个负载的流量百分比
+
+   - 确保在**Display**下拉框中选择了**Service Nodes**来显示service节点
+
+     ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200902171558299-342161384.png)
+
+2. 通过点击`reviews`服务(三角形)关注`bookinfo`图表中的`reviews`服务
+
+   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200903092114045-922301504.png)
+
+3. 在右上角的下拉框中选择**Show Details**进入ratings的service设置
+
+   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200903092209125-1452874994.png)
+
+4. 在**Action**下拉框中，选择**Create Weighted Routing**来访问加权路由向导
+
+   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200903092323000-703073457.png)
+
+5. 通过拖动滑块来调整到负载的流量百分比。将`reviews-v1`设置为30%，`reviews-v2`设置为0%，将`reviews-v3`设置为70%。
+
+   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200903092422243-1664496989.png)
+
+6. 点击**Create**创建该路由。对应会在istio中创建用于流量划分的一个VirtualService和一个DestinationRule：
+
+   ```yaml
+   apiVersion: networking.istio.io/v1beta1
+   kind: VirtualService
+   metadata:
+     labels:
+       kiali_wizard: weighted_routing
+     name: reviews
+     namespace: default
+   spec:
+     hosts:
+     - reviews.default.svc.cluster.local
+     http:
+     - route:
+       - destination:
+           host: reviews.default.svc.cluster.local
+           subset: v1
+         weight: 30
+       - destination:
+           host: reviews.default.svc.cluster.local
+           subset: v2
+         weight: 0
+       - destination:
+           host: reviews.default.svc.cluster.local
+           subset: v3
+         weight: 70
+   ```
+
+   ```yaml
+   kind: DestinationRule
+   metadata:
+     labels:
+       kiali_wizard: weighted_routing
+     name: reviews
+     namespace: default
+   spec:
+     host: reviews.default.svc.cluster.local
+     subsets:
+     - labels:
+         version: v1
+       name: v1
+     - labels:
+         version: v2
+       name: v2
+     - labels:
+         version: v3
+       name: v3
+   ```
+
+7. 点击左边导航栏的**Graph**按钮返回到`bookinfo`图表
+
+8. 向bookinfo应用发送请求。例如使用如下命令每秒发送一个请求：
+
+   ```shell
+   $ watch -n 1 curl -o /dev/null -s -w %{http_code} $GATEWAY_URL/productpage
+   ```
+
+9. 一段时间后，可以看到流量百分比会体现为新的流量路由，即v1版本接收到30%的流量，v2版本没有流量，v3版本接收到70%的流量
+
+   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200903093952583-1712584017.png)
+
+### 验证Istio配置
+
+Kiali可以验证Istio的资源来确保它们遵循正确的约定和语义。根据配置错误的严重性，可以将Istio资源配置中检测到的任何问题标记为错误或警告。
+
+下面将尝试对服务端口名称进行无效性修改来查看Kiali如何报告错误：
+
+1. 将`details`服务的端口名称从`http`修改为`foo`
+
+   ```shell
+   # kubectl patch service details -n default --type json -p '[{"op":"replace","path":"/spec/ports/0/name", "value":"foo"}]'
+   ```
+
+2. 点击左侧导航栏的**Services** 转到服务列表
+
+3. 选择`bookinfo`所在的命名空间
+
+4. 注意在`details`一行中显示的错误图标
+
+   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200903095134989-835181854.png)
+
+5. 点击**Name**一栏对应的`details`来查看详细信息
+
+   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200903095532765-1273194629.png)
+
+6. 将端口名称切换回`http`，可以看到`bookinfo`又变的正常了
+
+   ```shell
+   # kubectl patch service details -n default --type json -p '[{"op":"replace","path":"/spec/ports/0/name", "value":"http"}]'
+   ```
+
+   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200903095746223-530273971.png)
+
+### 查看和修改Istio的配置YAML
+
+Kiali提供了一个YAML编辑器，可以用于查看和修改Istio的配置资源。YAML编辑器也提供了校验配置的功能。
+
+1. 创建一条Bookinfo的destination rules
+
+   ```shell
+   $ kubectl apply -f samples/bookinfo/networking/destination-rule-all.yaml
+   ```
+
+2. 点击导航栏左边的`Istio Config`转到istio的配置列表
+
+3. 选择`bookinfo`所在的命名空间
+
+4. 注意在右上角有提示配置的错误和告警信息
+
+   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200903100625478-1720279913.png)
+
+5. 将鼠标悬停在`details`行**Configuration** 列中的错误图标上，可以查看其他消息。
+
+   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200903100414057-1870543494.png)
+
+6. 单击**Name**列中的`details`链接，导航到`details`的destination rule视图。
+
+7. 可以看到有校验未通过的错误提示
+
+   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200903100955144-1641983635.png)
+
+8. 点击`YAML`查看Istio的destination rule规则，Kiali用颜色高亮除了未通过有效性校验的行
+
+   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200903101041230-1667799364.png)
+
+9. 将鼠标悬停在红色图标上可以查看工具提示消息，该消息提示触发错误的验证检查。
+
+   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200903101450101-544298644.png)
+
+10. 删除创建的bookinfo的destination rule，进行环境恢复
+
+    ```shell
+    $ kubectl delete -f samples/bookinfo/networking/destination-rule-all.yaml
+    ```
+
+> 在官方文档中，上述YAML中是存在黄色的告警图标，但实际部署时并没有出现。
+
+### 关于Kiali Developer API
+
+为了生成表示图表和其他指标，健康，以及配置信息的JSON文件，可以参考[Kiali Developer API](https://www.kiali.io/api)。例如，可以通过访问`$KIALI_URL/api/namespaces/graph?namespaces=default&graphType=app`来获取使用`app` 图表类型的JSON表示格式。
+
+Kiali Developer API建立在Prometheus查询之上，并取决于标准的Istio metric配置，它还会执行kubernetes API调用来获取服务的其他详细信息。为了更好地使用Kiali，请在自己的应用组件中使用metadata labels `app`和`version`。
+
+> **请注意，Kiali Developer API可能在不同版本间发送变更，且不保证向后兼容。**
+
+### 其他特性
+
+Kiali还有其他丰富的特性，如[与Jaeger跟踪的集成](https://kiali.io/documentation/latest/features/#_detail_traces)。
+
+更多细节和特性，参见Kiali[官方文档](https://kiali.io/documentation/latest/features/)。
+
+### 卸载
+
+```shell
+$ kubectl delete -f https://raw.githubusercontent.com/istio/istio/release-1.7/samples/addons/kiali.yaml
+```
 

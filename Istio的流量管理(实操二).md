@@ -38,6 +38,8 @@ $ export TCP_INGRESS_PORT=$(kubectl -n istio-system get service istio-ingressgat
 
 下面是istio-system命名空间的`istio-ingressgateway ` service中的一部分端口信息，可以看到`http2`和`https`的nodeport分别为`31194`和`31785`，对应上面的`INGRESS_PORT`和`SECURE_INGRESS_PORT`
 
+> Istio的ingressgateway和egressgateway本质上还是属于kubernetes的一个普通pod，有对应的service
+
 ```json
 {
     "name": "http2",

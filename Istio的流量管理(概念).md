@@ -275,14 +275,14 @@ kind: Gateway
 metadata:
   name: ext-host-gwy
 spec:
-  selector:              #指定gateway配置下发的代理，如具有标签app: my-gateway-controller的pod
+  selector:             #指定gateway配置下发的代理，如具有标签app: my-gateway-controller的pod
     app: my-gateway-controller
   servers:
-  - port:                #gateway pod暴露的端口信息,监听外部连接
-      number: 443
+  - port:
+      number: 443		# gateway pod监听端口，当创建该gateway时，会在符合selector的pod中创建按一个443的监听端口
       name: https
       protocol: HTTPS
-    hosts:                #gateway暴露的主机地址
+    hosts:               #gateway暴露的主机地址
     - ext-host.example.com  
     tls:
       mode: SIMPLE
