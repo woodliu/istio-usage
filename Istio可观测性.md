@@ -410,7 +410,7 @@ $ kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.7/sam
 
 ### 验证Istio配置
 
-Kiali可以验证Istio的资源来确保它们遵循正确的约定和语义。根据配置错误的严重性，可以将Istio资源配置中检测到的任何问题标记为错误或警告。
+Kiali可以验证Istio的资源来确保它们遵循正确的约定和语义。根据配置错误的严重性，可以将Istio资源配置中检测到的任何问题标记为错误或警告。更多Kiali的有效性校验参见 [Kiali validations page](https://kiali.io/documentation/latest/validations/)。
 
 下面将尝试对服务端口名称进行无效性修改来查看Kiali如何报告错误：
 

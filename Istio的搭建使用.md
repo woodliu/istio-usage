@@ -16,7 +16,7 @@ must only have "properties", "required" or "description" at the root if the stat
 
 #### openshift安装Istio
 
-istio的安装涉及到两个文件：profile和manifest。前者用于控制组件的安装和组件的参数，profile配置文件所在的目录为`install/kubernetes/operator/profiles`；后者为安装所使用的yaml文件，如service，deployment等，会用到profile提供的参数，manifest配置文件所在的目录为`install/kubernetes/operator/charts`。因此可以通过两种方式安装istio，一种是通过profile进行安装，istio默认使用这种方式，如：
+istio的安装涉及到两个文件：profile和manifest。前者用于控制组件的安装和组件的参数，profile配置文件所在的目录为`manifests/profiles`；后者为安装所使用的yaml文件，如service，deployment等，会用到profile提供的参数，manifest配置文件所在的目录为`manifests/charts`。因此可以通过两种方式安装istio，一种是通过profile进行安装，istio默认使用这种方式，如：
 
 ```shell
 $ istioctl install --set profile=demo
@@ -509,6 +509,10 @@ $ istioctl manifest generate --revision=canary >canary.yaml
   ```
 
 ### sidecar注入
+
+> sidecar不能注入到kube-system或kube-public名称空间中
+>
+> sidecar不能注入使用主机网络的吊舱中
 
 为了使用Istio的特性，pods必须运行在istio sidecar proxy的网格中。下面介绍两种注入istio sidecar的方式：手动注入和自动注入。
 
