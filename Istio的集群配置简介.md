@@ -1,6 +1,59 @@
-## Istio的健康检查和扩展证书有效期
+## Istio的集群配置简介
 
 [TOC]
+
+本节涵盖官方的[配置](https://istio.io/latest/docs/ops/configuration/)章节。选取了几个比较重要的点进行讲解。
+
+### 协议选择
+
+Istio默认支持代理所有的TCP流量，但为了提供额外的能力，如路由和metrics，必须确定使用的协议。可以通过自动或手动指定协议。
+
+#### 手动选择协议
+
+可以在定义Service的时候手动指定协议。提供如下两种方式：
+
+- 通过端口的名称：`name: <protocol>[-<suffix>]`.
+- 在kubernetes 1.18+，可以使用`appProtocol`字段: `appProtocol: <protocol>`.
+
+支持如下协议：
+
+- `grpc`
+- `grpc-web`
+- `http`
+- `http2`
+- `https`
+- `mongo`
+- `mysql`*
+- `redis`*
+- `tcp`
+- `tls`
+- `udp`
+
+这些协议默认是不启用的，以避免意外启用实验性功能。为了启用它们，可以配置对应的Pilot[环境变量](https://istio.io/latest/docs/reference/commands/pilot-discovery/#envvars)。如`PILOT_ENABLE_MYSQL_FILTER`，`PILOT_ENABLE_REDIS_FILTER`等。
+
+下面的Service使用`appProtocol`和端口名称分别定义了一个`mysql`端口和一个`http`端口：
+
+```yaml
+kind: Service
+metadata:
+  name: myservice
+spec:
+  ports:
+  - number: 3306
+    name: database
+    appProtocol: mysql
+  - number: 80
+    name: http-web
+```
+
+#### 自动选择协议
+
+Istio可以自动探测HTTP和HTTP/2流量。如果无法自动判断协议，则会认为该流量是明文的TCP流量。
+
+默认会启用该特性。可以使用如下方式在安装时关闭该特性：
+
+- `--set values.pilot.enableProtocolSniffingForOutbound=false`：禁用outbound listener上的协议探测(如果没有指定或不支持端口协议)
+- `--set values.pilot.enableProtocolSniffingForInbound=false`：禁用inbound listener上的协议探测(如果没有指定或不支持端口协议)
 
 ### 健康检查
 
