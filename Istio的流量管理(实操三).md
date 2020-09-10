@@ -1,6 +1,6 @@
 # Istio的流量管理(实操三)
 
-涵盖官方文档[Traffic Management](https://istio.io/docs/tasks/traffic-management/)章节中的egress部分。其中有一小部分问题(已在下文标注)待官方解决。
+涵盖官方文档[Traffic Management](https://istio.io/docs/tasks/traffic-management/)章节中的egress部分。
 
 [TOC]
 
@@ -130,7 +130,7 @@ istio有一个[安装选项](https://istio.io/docs/reference/config/istio.mesh.v
 
    注意HTTP添加了istio sidecar代理首部`X-Envoy-Decorator-Operation`。
 
-3. 校验`SOURCE_POD` sidecar代理的日志(实际并没有如同官方文档中的打印，[issue](https://github.com/istio/istio.io/issues/7419)跟踪)
+3. 校验`SOURCE_POD` sidecar代理的日志
 
    ```shell
    $ kubectl logs $SOURCE_POD -c istio-proxy | tail
@@ -1083,7 +1083,7 @@ $ istioctl install -f cni-annotations.yaml --set values.global.istioNamespace=is
 > | --------------- | ------------------------------------------------------------ |
 > | virtualService  | [tls](https://istio.io/latest/docs/reference/config/networking/virtual-service/#TLSRoute)字段：用于非终结TLS&HTTPS流量的路由规则。通常使用ClientHello消息中的SNI值进行路由。TLS路由将会应用于端口名为`https -` `tls-`的平台服务，使用HTTPS/TLS协议的非终结网关端口(使用`passthrough`TLS模式)，以及使用HTTPS/TLS协议的serviceEntry端口。注：不关联virtual service的`https-`或`tls-`端口的流量将被视为不透明的TCP流量。 |
 > | DestinationRule | DestinationRule主要对连接上游服务的tls进行配置，包含网格内的网关以及网格外的服务<br />[ClientTLSSettings](https://istio.io/latest/docs/reference/config/networking/destination-rule/#ClientTLSSettings)字段：连接上游的SSL/TLS相关设置<br />[portLevelSettings](https://istio.io/latest/docs/reference/config/networking/destination-rule/#TrafficPolicy-PortTrafficPolicy)字段：按照端口对上游服务进行设置，该字段包含了ClientTLSSettings字段 |
-> | Gateway         | Gateway主要暴露的服务的tls进行配置，含ingress和egress，前者通常可以使用SIMPLE/MUTUAL模式，后者可以使用SIMPLE/MUTUAL/ISTIO_MUTUAL模式[<br />ServerTLSSettings](https://istio.io/latest/docs/reference/config/networking/gateway/#ServerTLSSettings)字段：控制服务端行为的TLS相关选项集。使用这些选项来控制是否应将所有http请求重定向到https，并使用[TLS模式](https://istio.io/latest/docs/reference/config/networking/gateway/#ServerTLSSettings-TLSmode) |
+> | Gateway         | Gateway主要暴露的服务的tls进行配置，含ingress和egress，前者通常可以使用SIMPLE/MUTUAL模式，后者可以使用SIMPLE/MUTUAL/ISTIO_MUTUAL模式。[ServerTLSSettings](https://istio.io/latest/docs/reference/config/networking/gateway/#ServerTLSSettings)字段：控制服务端行为的TLS相关选项集。使用这些选项来控制是否应将所有http请求重定向到https，并使用[TLS模式](https://istio.io/latest/docs/reference/config/networking/gateway/#ServerTLSSettings-TLSmode) |
 
 #### 卸载
 
@@ -2032,7 +2032,7 @@ $ kubectl delete service sleep
 $ kubectl delete deployment sleep
 ```
 
-## 使用通配符主机的egress
+## 使用通配符主机的Egress
 
 上两节中为网关配置了特定的主机名，如 `edition.cnn.com`。本节将展示如何为egress流量配置位于同域的一组主机，如`*.wikipedia.org`。
 
@@ -2043,6 +2043,12 @@ $ kubectl delete deployment sleep
 > 原文中用于展示的站点为`*.wikipedia.org`，但鉴于这类站点在国内无法访问，故修改为`*.baidu.com`
 
 ### 部署
+
+重新安装Istio，使用`--set meshConfig.outboundTrafficPolicy.mode=REGISTRY_ONLY`默认阻塞出站流量
+
+```shell
+# istioctl install -f cni-annotations.yaml --set values.global.istioNamespace=istio-system --set values.gateways.istio-egressgateway.enabled=true --set meshConfig.outboundTrafficPolicy.mode=REGISTRY_ONLY --set meshConfig.accessLogFile="/dev/stdout"
+```
 
 部署sleep应用并获取POD名称
 
@@ -2069,25 +2075,7 @@ spec:
   ports:
   - number: 443
     name: tls
-    protocol: TLS
----
-apiVersion: networking.istio.io/v1alpha3
-kind: VirtualService
-metadata:
-  name: baidu
-spec:
-  hosts:
-  - "*.baidu.com"
-  tls:
-  - match:
-    - port: 443
-      sniHosts:
-      - "*.baidu.com"
-    route:
-    - destination:
-        host: "*.baidu.com"
-        port:
-          number: 443
+    protocol: TLS #HTTPS也是可以的
 EOF
 ```
 
@@ -2099,20 +2087,17 @@ EOF
 <title>百度翻译-200种语言互译、沟通全世界！</title>
 ```
 
-> 可以不使用VirtualService
-
 #### 卸载
 
 ```shell
 $ kubectl delete serviceentry baidu
-$ kubectl delete virtualservice baidu
 ```
 
 ### 配置到通配符主机的egress网关流量
 
 通过egress网关访问通配符主机的配置取决于通配符域集是否由一个公共主机来提供服务。例如*\*.wikipedia.org*，所有指定语言的站点都由*\*wikipedia.org*的某一个服务端提供服务，这样就可以将流量路由到任何*\*.wikipedia.org*站点对应的IP(包括*www.wikipedia.org*)。
 
-> 由于map.baidu.com和fanyi.baidu.com的服务并不是由www.baidu.com对应的某个IP服务的(可以使用nslookup或dig命令查看)，因此无法用于测试本场景，下面为官网内容
+> 由于map.baidu.com和fanyi.baidu.com的服务并不是由www.baidu.com对应的某个IP服务的(可以使用`nslookup`或`dig`命令查看)，因此无法用于测试本场景，下面为官网内容。
 
 一般情况下，如果一个通配符的所有域名不是由一个托管服务器提供服务的，则需要更复杂的配置。
 
@@ -2134,8 +2119,8 @@ $ kubectl delete virtualservice baidu
      servers:
      - port:
          number: 443
-         name: tls
-         protocol: TLS
+         name: https
+         protocol: HTTPS
        hosts:
        - "*.wikipedia.org"
        tls:
@@ -2182,14 +2167,14 @@ $ kubectl delete virtualservice baidu
          - "*.wikipedia.org"
        route:
        - destination:
-           host: www.wikipedia.org #将流量从网格传给外部服务
+           host: www.wikipedia.org #将流量从网格传给外部服务。由于www.wikipedia.org可以处理不同语言的请求，因此在下面才能在用curl请求不同语言的站点时正确返回结果。
            port:
              number: 443
          weight: 100
    EOF
    ```
 
-2. 为目的服务www.wikipedia.com创建`ServiceEntry`
+2. 为目的服务www.wikipedia.com创建`ServiceEntry`。由于出站流量被`--set meshConfig.outboundTrafficPolicy.mode=REGISTRY_ONLY`阻塞，因此需要配置ServiceEntry指定外部服务，这样也便于监控流量。
 
    ```yaml
    $ kubectl apply -f - <<EOF
@@ -2202,21 +2187,28 @@ $ kubectl delete virtualservice baidu
      - www.wikipedia.org
      ports:
      - number: 443
-       name: tls
-       protocol: TLS
-     resolution: DNS
+       name: https
+       protocol: HTTPS
+     resolution: DNS #支持DNS和静态IP
    EOF
    ```
 
 3. 发送请求给https://map.baidu.com/和https://fanyi.baidu.com/:
 
    ```shell
-   $ kubectl exec -it $SOURCE_POD -c sleep -- sh -c 'curl -s https://en.wikipedia.org/wiki/Main_Page | grep -o "<title>.*</title>"; curl -s https://de.wikipedia.org/wiki/Wikipedia:Hauptseite | grep -o "<title>.*</title>"'
+   $ kubectl exec "$SOURCE_POD" -c sleep -- sh -c 'curl -s https://en.wikipedia.org/wiki/Main_Page | grep -o "<title>.*</title>"; curl -s https://de.wikipedia.org/wiki/Wikipedia:Hauptseite | grep -o "<title>.*</title>"'
    <title>Wikipedia, the free encyclopedia</title>
    <title>Wikipedia – Die freie Enzyklopädie</title>
    ```
+   
+4. 校验egress gateway的日志
 
-##### 卸载
+   ```shell
+   $ kubectl exec "$(kubectl get pod -l istio=egressgateway -n istio-system -o jsonpath='{.items[0].metadata.name}')" -c istio-proxy -n istio-system -- pilot-agent request GET clusters | grep '^outbound|443||www.wikipedia.org.*cx_total:'
+   outbound|443||www.wikipedia.org::208.80.154.224:443::cx_total::2
+   ```
+
+#### 卸载
 
 ```shell
 $ kubectl delete serviceentry www-wikipedia
@@ -2227,7 +2219,7 @@ $ kubectl delete destinationrule egressgateway-for-wikipedia
 
 #### 任意域的通配符配置
 
-上一节中的配置之所以能够生效，是因为任何一个*wikipedia.org*服务端都可以服务所有的*\*.wikipedia.org*站点。然有些情况下不是这样的，例如有可能希望访问更加通用的域，如`.com`或`.org`。
+上一节中的配置之所以能够生效，是因为任何一个*wikipedia.org*服务端都可以服务所有的*\*.wikipedia.org*站点。但情况不总是这样的，例如有可能希望访问更加通用的域，如`.com`或`.org`。
 
 在istio网关上配置到任意通配符的域会带来挑战，上一节中直接将流量传递给了 *www.wikipedia.org*(直接配置到了网关上)。受限于[Envoy](https://www.envoyproxy.io/)(默认的istio egress网关代理)，网关并不知道接收到的请求中的任意主机的IP地址。Envoy会将流量路由到**预定义的主机**，**预定义的IP地址**或**请求中的原始目的IP地址**。在网关场景下，由于请求会首先被路由到egress网关上，因此会丢失请求中的原始目的IP地址，并将目的IP地址替换为网关的IP地址，最终会导致基于Envoy的istio网关无法路由到没有进行预配置的任意主机，进而导致无法为任意通配符域执行流量控制。
 
@@ -2235,7 +2227,7 @@ $ kubectl delete destinationrule egressgateway-for-wikipedia
 
 使用SNI代理和相关组件的egress网关架构如下，由于Envoy无法处理任意通配符的主机，因此需要转发到SNI代理上进行SNI的路由处理。
 
-![](https://img2020.cnblogs.com/blog/1334952/202008/1334952-20200827105838226-1820408330.png)
+![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200909092538627-543070795.png)
 
 下面将展示如何重新部署egress网关来使用SNI代理，并配置istio通过网关路由HTTPS流量到任意通配符域。
 
@@ -2243,7 +2235,7 @@ $ kubectl delete destinationrule egressgateway-for-wikipedia
 
 本节中将在标准的istio Envoy代理之外部署为egress网关部署一个SNI代理。本例中使用Nginx作为SNI代理，该SNI代理将会监听8443端口，然后将流量转发到443端口。
 
-1. 为Nginx SNI代理创建配置文件。注意`server`下的`listen`指令为8443，`proxy_pass`指令使用`ssl_preread_server_name`，端口443以及将`ssl_preread`设置为`on`来启用`SNI` reading。
+1. 为Nginx SNI代理创建配置文件。注意`server`下的`listen`指令指定了端口`8443`，`proxy_pass`指令使用`ssl_preread_server_name`，端口`443`以及将`ssl_preread`设置为`on`来启用`SNI` reading。
 
    ```shell
    $ cat <<EOF > ./sni-proxy.conf
@@ -2270,19 +2262,313 @@ $ kubectl delete destinationrule egressgateway-for-wikipedia
    EOF
    ```
 
-2. 创建一个kubernets ConfigMap来保存Nginx SNI代理的配置
+2. 创建一个kubernets ConfigMap来保存Nginx SNI代理的配置：
 
    ```shell
    $ kubectl create configmap egress-sni-proxy-configmap -n istio-system --from-file=nginx.conf=./sni-proxy.conf
    ```
 
-3. 下面命令将生成 `istio-egressgateway-with-sni-proxy.yaml` 
+3. 创建一个`IstioOperator` CR来添加带SNI代理的新的egress网关。 
 
-> 本例因为官方isitoOperator格式有变而无法运行，官方可能需要修改代码，参见此[issue](https://github.com/istio/istio/issues/26635)
+   ```yaml
+   # cat egressgateway-with-sni-proxy.yaml
+   apiVersion: install.istio.io/v1alpha1
+   kind: IstioOperator
+   spec:
+     components:
+       egressGateways:
+       - name: istio-egressgateway-with-sni-proxy
+         enabled: true
+         label:
+           app: istio-egressgateway-with-sni-proxy
+           istio: egressgateway-with-sni-proxy
+         k8s:
+           service:
+             ports:
+             - port: 443
+               name: https
+       cni:
+         enabled: true
+         namespace: kube-system
+     values:
+       meshConfig:
+         certificates:
+           - secretName: dns.example1-service-account
+             dnsNames: [example1.istio-system.svc, example1.istio-system]
+           - secretName: dns.example2-service-account
+             dnsNames: [example2.istio-system.svc, example2.istio-system]
+       cni:
+         excludeNamespaces:
+          - istio-system
+          - kube-system
+         chained: false
+         cniBinDir: /var/lib/cni/bin
+         cniConfDir: /etc/cni/multus/net.d
+         cniConfFileName: istio-cni.conf
+       sidecarInjectorWebhook:
+         injectedAnnotations:
+           "k8s.v1.cni.cncf.io/networks": istio-cni
+   ```
+   
+4. 部署新的网关
 
-##### 配置使用SNI代理的egress网关的路由转发
+   ```shell
+   # istioctl install -f egressgateway-with-sni-proxy.yaml --set values.global.istioNamespace=istio-system --set values.gateways.istio-egressgateway.enabled=true --set meshConfig.outboundTrafficPolicy.mode=REGISTRY_ONLY --set meshConfig.accessLogFile="/dev/stdout" --set values.gateways.istio-egressgateway.runAsRoot=true
+   ```
 
-....
+5. 给Pod `istio-egressgateway-with-sni-proxy` patch一个SNI代理容器
+
+   ```yaml
+   $ cat <<EOF > ./egressgateway-with-sni-proxy-patch.yaml
+   spec:
+     template:
+       spec:
+         volumes:
+         - name: sni-proxy-config
+           configMap:
+             name: egress-sni-proxy-configmap
+             defaultMode: 292 # 0444
+         containers:
+         - name: sni-proxy
+           image: nginx
+           volumeMounts:
+           - name: sni-proxy-config
+             mountPath: /etc/nginx
+             readOnly: true
+           securityContext:
+             runAsNonRoot: false
+             runAsUser: 0
+   EOF
+   ```
+
+   ```shell
+   # kubectl patch deployment istio-egressgateway-with-sni-proxy -n istio-system --patch "$(cat ./egressgateway-with-sni-proxy-patch.yaml)"
+   deployment.extensions/istio-egressgateway-with-sni-proxy patched
+   ```
+
+6. 校验新的egress网关已经在运行，且该pod有2个容器(一个是Envoy代理，另一个是SNI代理)
+
+   ```shell
+   # kubectl get pod -l istio=egressgateway-with-sni-proxy -n istio-system
+   NAME                                                 READY   STATUS    RESTARTS   AGE
+   istio-egressgateway-with-sni-proxy-b79df9c8c-brfbw   2/2     Running   0          2m4s
+   ```
+
+7. 创建一个service entry，静态地址为127.0.0.1，并禁用mutual TLS。
+
+   ```yaml
+   # kubectl apply -f - <<EOF
+   apiVersion: networking.istio.io/v1alpha3
+   kind: ServiceEntry
+   metadata:
+     name: sni-proxy
+   spec:
+     hosts:
+     - sni-proxy.local
+     location: MESH_EXTERNAL #将SNI代理设置为外部服务，不启用mTLS
+     ports:
+     - number: 8443
+       name: tcp
+       protocol: TCP
+     resolution: STATIC
+     endpoints:
+     - address: 127.0.0.1
+   ---
+   apiVersion: networking.istio.io/v1alpha3
+   kind: DestinationRule
+   metadata:
+     name: disable-mtls-for-sni-proxy
+   spec:
+     host: sni-proxy.local #配置到sni-proxy.local的规则，禁用mTLS
+     trafficPolicy:
+       tls:
+         mode: DISABLE
+   EOF
+   ```
+
+##### 配置流量通过带SNI代理的Egress网关
+
+1. 为`*.baidu.com`定义一个`ServiceEntry`
+
+   ```yaml
+   $ cat <<EOF | kubectl create -f -
+   apiVersion: networking.istio.io/v1alpha3
+   kind: ServiceEntry
+   metadata:
+     name: baidu
+   spec:
+     hosts:
+     - "*.baidu.com"
+     ports:
+     - number: 443
+       name: tls
+       protocol: TLS
+   EOF
+   ```
+
+2. 为 *\*.baidu.com*，端口443创建一个egress `Gateway`，以及virtual service将流量通过网关导入*\*.baidu.com*
+
+   ```yaml
+   # kubectl apply -f - <<EOF
+   apiVersion: networking.istio.io/v1alpha3
+   kind: Gateway
+   metadata:
+     name: istio-egressgateway-with-sni-proxy
+   spec:
+     selector:
+       istio: egressgateway-with-sni-proxy
+     servers: #配置监听"*.baidu.com"，并启用mTLS
+     - port:
+         number: 443
+         name: tls-egress
+         protocol: TLS
+       hosts:
+       - "*.baidu.com"
+       tls:
+         mode: ISTIO_MUTUAL
+   ---
+   apiVersion: networking.istio.io/v1alpha3
+   kind: DestinationRule
+   metadata:
+     name: egressgateway-for-baidu
+   spec:
+     host: istio-egressgateway-with-sni-proxy.istio-system.svc.cluster.local #配置在端口443上启用mTLS
+     subsets:
+       - name: baidu
+         trafficPolicy:
+           loadBalancer:
+             simple: ROUND_ROBIN
+           portLevelSettings:
+           - port:
+               number: 443
+             tls:
+               mode: ISTIO_MUTUAL
+   ---
+   apiVersion: networking.istio.io/v1alpha3
+   kind: VirtualService
+   metadata:
+     name: direct-baidu-through-egress-gateway
+   spec:
+     hosts:
+     - "*.baidu.com"
+     gateways:
+     - mesh
+     - istio-egressgateway-with-sni-proxy
+     tls:
+     - match: #将网格内部发往"*.baidu.com:443"的流量定向到istio-egressgateway-with-sni-proxy.istio-system.svc.cluster.local:443
+       - gateways:
+         - mesh
+         port: 443
+         sniHosts:
+         - "*.baidu.com"
+       route:
+       - destination:
+           host: istio-egressgateway-with-sni-proxy.istio-system.svc.cluster.local
+           subset: baidu
+           port:
+             number: 443
+         weight: 100
+     tcp:
+     - match: #将网关istio-egressgateway-with-sni-proxy上443端口的流量定向到sni-proxy.local:8443
+       - gateways:
+         - istio-egressgateway-with-sni-proxy
+         port: 443
+       route:
+       - destination:
+           host: sni-proxy.local
+           port:
+             number: 8443
+         weight: 100
+   ---
+   # The following filter is used to forward the original SNI (sent by the application) as the SNI of the
+   # mutual TLS connection.
+   # The forwarded SNI will be will be used to enforce policies based on the original SNI value.
+   apiVersion: networking.istio.io/v1alpha3
+   kind: EnvoyFilter
+   metadata:
+     name: forward-downstream-sni
+   spec:
+     configPatches:
+     - applyTo: NETWORK_FILTER
+       match:
+         context: SIDECAR_OUTBOUND
+         listener:
+           portNumber: 443
+           filterChain:
+             filter:
+               name: istio.stats
+       patch:
+         operation: INSERT_BEFORE
+         value:
+            name: forward_downstream_sni
+            config: {}
+   EOF
+   ```
+
+3. 给网关添加一个EnvoyFilter，防止欺骗
+
+   ```yaml
+   # kubectl apply -n istio-system -f - <<EOF
+   # The following filter verifies that the SNI of the mutual TLS connection is
+   # identical to the original SNI issued by the client (the SNI used for routing by the SNI proxy).
+   # The filter prevents the gateway from being deceived by a malicious client: routing to one SNI while
+   # reporting some other value of SNI. If the original SNI does not match the SNI of the mutual TLS connection,
+   # the filter will block the connection to the external service.
+   apiVersion: networking.istio.io/v1alpha3
+   kind: EnvoyFilter
+   metadata:
+     name: egress-gateway-sni-verifier
+   spec:
+     workloadSelector:
+       labels:
+         app: istio-egressgateway-with-sni-proxy
+     configPatches:
+     - applyTo: NETWORK_FILTER
+       match:
+         context: GATEWAY
+         listener:
+           portNumber: 443
+           filterChain:
+             filter:
+               name: istio.stats
+       patch:
+         operation: INSERT_BEFORE
+         value:
+            name: sni_verifier
+            config: {}
+   EOF
+   ```
+
+4. 发送HTTPS请求到 https://map.baidu.com和https://fanyi.baidu.com:
+
+   ```shell
+   # kubectl exec "$SOURCE_POD" -c sleep -- sh -c 'curl -s https://map.baidu.com/ | grep -o "<title>.*</title>"; curl -s https://fanyi.baidu.com/ | grep -o "<title>.*</title>"'
+   <title>百度地图</title>
+   <title>百度翻译-200种语言互译、沟通全世界！</title>
+   ```
+
+5. 校验egress网关的Envoy代理的日志
+
+   ```shell
+   $ kubectl logs -l istio=egressgateway-with-sni-proxy -c istio-proxy -n istio-system
+   ```
+
+   日志内容如下：
+
+   ```shell
+   # kubectl logs -l istio=egressgateway-with-sni-proxy -c istio-proxy -n istio-system
+   [2020-09-08T05:32:32.190Z] "- - -" 0 - "-" "-" 932 153941 622 - "-" "-" "-" "-" "127.0.0.1:8443" outbound|8443||sni-proxy.local 127.0.0.1:49018 10.83.0.193:443 10.80.3.61:43114 fanyi.baidu.com -
+   [2020-09-08T05:37:46.853Z] "- - -" 0 - "-" "-" 780 166018 37481 - "-" "-" "-" "-" "127.0.0.1:8443" outbound|8443||sni-proxy.local 127.0.0.1:58212 10.83.0.193:443 10.80.3.61:53980 map.baidu.com -
+   ```
+
+6. 校验SNI代理的日志
+
+   ```shell
+   # kubectl logs -l istio=egressgateway-with-sni-proxy -n istio-system -c sni-proxy
+   127.0.0.1 [08/Sep/2020:05:32:32 +0000] TCP [map.baidu.com]200 51689 232 630.131
+   127.0.0.1 [08/Sep/2020:05:32:32 +0000] TCP [fanyi.baidu.com]200 153941 415 0.622
+   ```
+
 
 ##### 卸载
 

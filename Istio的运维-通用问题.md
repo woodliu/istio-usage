@@ -6,7 +6,7 @@
 
 ### Envoy拒绝了请求
 
-请求可能由于各种原因而被拒绝，了解被拒绝原因的最好方式是查看Envoy的日志。默认情况下，日志会打印到容器的标准输出中，使用如下命令查看日志。通过这种方式也可以查看进出容器sidecar代理的流量信息。
+请求可能由于各种原因而被拒绝，可以通过查看Envoy的日志来了解被拒绝的原因。默认情况下，日志会打印到容器的标准输出中，使用如下命令查看日志。通过这种方式也可以查看进出容器sidecar代理的流量信息。
 
 ```shell
 $ kubectl logs PODNAME -c istio-proxy -n NAMESPACE
@@ -20,27 +20,29 @@ istio的[默认日志格式](https://www.envoyproxy.io/docs/envoy/latest/configu
 
 下面是对http://www.baidu.com的访问日志。对日志的解析可以参考百分号`%`和引号，每个百分号对应一个字段，日志引号内的内容与日志格式是对应的，如`"GET / HTTP/1.1"`对应`"%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%"`。
 
-```
+```shell
 "GET / HTTP/1.1" 200 - "-" "-" 0 2381 31 31 "-" "curl/7.35.0" "dbdddb94-d1f5-4bdb-9fd4-a2e4002836d1" "www.baidu.com" "180.101.49.11:80" PassthroughCluster 10.83.0.36:60858 180.101.49.11:80 10.83.0.36:60856 - allow_any
 ```
 
 需要注意的是Envoy的`RESPONSE_FLAGS`字段，一般的响应字段如下，更多参见Envoy的[响应标识](https://www.envoyproxy.io/docs/envoy/latest/configuration/observability/access_log/usage#config-access-log-format-response-flags)
 
-- `NR`:没有配置路由，检查`DestinationRule` 或`VirtualService`。
+- `NR`：没有配置路由，检查`DestinationRule` 或`VirtualService`。
 - `UO`: 上游发生了熔断，检查`DestinationRule`中的断路器设置。
 - `UF`: 无法连接上游, 如果使用了istio认证，按照 [mutual TLS configuration conflict](https://istio.io/docs/ops/common-problems/network-issues/#503-errors-after-setting-destination-rule)进行检查。
 
 ### 路由规则似乎没有影响到流量
 
-1. 当前Envoy sidecar实现中，可能需要达到100个请求才能观测到不同版本间基于权重的流量分发。
-2. 保证kubernetes中的[pod和service的配置](https://istio.io/docs/ops/deployment/requirements/)满足istio的要求。
-3. 规则可能需要等待一段时间才能生效。
+当前Envoy sidecar实现中，可能需要达到100个请求才能观测到不同版本间基于权重的流量分发。
+
+如果在Bookinfo例子中，路由规则工作正常，但类似的版本路由规则对自己的应用却没有生效。可能是因为kubernetes service需要进行略微修改。kubernetes service必须必须遵守某些限制来使用Istio的路由特性。更多信息参见[Requirements for Pods and Services](https://istio.io/latest/docs/ops/deployment/requirements/)。
+
+另外一个潜在的问题是路由规则可能需要等待一段时间才能生效。Istio在kubernetes的实现中使用了一个最终一致算法来保证所有的Envoy sidecar具有正确的配置(包括路由规则)。一个配置需要一定时间才能传递到所有的sidecar中。对于大型部署，将花费更长的时间进行配置的传递，并且可能会有几秒钟的延迟时间。
 
 ### 设置destination rule之后发生503错误
 
 > 只有在安装的时候禁用了[自动mutual TLS](https://istio.io/docs/tasks/security/authentication/authn-policy/#auto-mutual-tls)时才会发生该错误
 
-当设置了`DestinationRule`之后发生了HTTP 503错误，而在移除`DestinationRule`之后，该错误消息，说明`DestinationRule`导致了TLS连接问题。
+当设置了`DestinationRule`之后发生了HTTP 503错误，而在移除`DestinationRule`之后，该错误消失，说明`DestinationRule`导致了TLS连接问题。
 
 例如，如果集群范围配置了mutual TLS，`DestinationRule`必须包含如下`trafficPolicy`：
 
@@ -98,7 +100,7 @@ spec:
 
 这种情况下可以看到到达helloworld服务的请求会经过ingress网关，但不会定向到subset v1，仍然使用默认的轮询路由。
 
-使用了网关host(如myapp.com)的ingress会使用myapp `VirtualService`中的规则将流量分发到helloworld服务的所有endpoint上，只有host为`helloworld.default.svc.cluster.local`的**内部**请求才会被定向到subset v1，这种情况下，两个`VirtualService`可以看作是相互独立的.
+使用了网关host(如`myapp.com`)的ingress会使用myapp `VirtualService`中的规则将流量分发到helloworld服务的所有endpoint上，只有host为`helloworld.default.svc.cluster.local`的**内部**请求才会被定向到subset v1，这种情况下，两个`VirtualService`可以看作是相互独立的.
 
 为了控制来自网关的流量，需要在myapp `VirtualService`中指定subset：
 
@@ -157,10 +159,6 @@ spec:
         subset: v1
 ```
 
-### Headless TCP服务连接丢失
-
-略(涉及老版本的citadel)
-
 ### Envoy崩溃
 
 使用`ulimit -a`进行校验打开文件的描述符数目，如果设置值过小，会导致Envoy断言并崩溃，日志如下。可以使用如`ulimit -n 16384`增大该限制。
@@ -214,7 +212,7 @@ server {
 
 ### 在一个网关上配置多个TLS hosts时端口冲突
 
-如果一个`Gateway`的配置中`selector`的标签与现有的`Gateway`相同，如果这两个`Gateway`暴露了相同的HTTPS端口，此时需要保证端口名称的唯一性。否则，这种配置不会立即返回错误，且在gateway运行时会忽略这种错误。例如：
+如果一个`Gateway`的配置中`selector`的标签与另外一个现有的`Gateway`相同，且这两个`Gateway`暴露了相同的HTTPS端口，此时需要保证端口名称的唯一性。否则，这种配置不会立即返回错误，且在gateway运行时会忽略这种错误。例如：
 
 ```yaml
 apiVersion: networking.istio.io/v1alpha3
@@ -269,7 +267,7 @@ $ kubectl logs -n istio-system $(kubectl get pod -l istio=pilot -n istio-system 
 2018-09-14T19:02:31.916960Z info    model   skipping server on gateway mygateway2 port https.443.HTTPS: non unique port name for HTTPS port
 ```
 
-为了避免这种问题，需要保证多个`protocol: HTTPS`端口的名称是唯一的，例如，将第一个Gateway的端口名改为`https2`：
+为了避免这种问题，需要保证多个`protocol: HTTPS`端口的名称是唯一的，例如，将第二个Gateway的端口名改为`https2`：
 
 ```yaml
 apiVersion: networking.istio.io/v1alpha3
@@ -291,4 +289,16 @@ spec:
     hosts:
     - "myhost2.com"
 ```
+
+## 安全问题
+
+### 终端用户认证失败
+
+使用Istio，可以通过[请求认证策略](https://preliminary.istio.io/latest/docs/tasks/security/authentication/authn-policy/#end-user-authentication)来启用对用户的认证。通过如下步骤来进行故障排查。
+
+
+
+
+
+
 
