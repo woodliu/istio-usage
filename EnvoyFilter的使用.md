@@ -53,6 +53,8 @@ istio-p+       1       0  0 Sep10 ?        00:03:39 /usr/local/bin/pilot-agent p
 istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/istio/proxy/envoy-rev0.json --restart-epoch 0 --drain-time-s 45 --parent-shutdown-time-s 60 --service-cluster sleep.default --service-node sidecar~10.80.3.109~sleep-856d589c9b-x6szk.default~default.svc.cluster.local --local-address-ip-version v4 --log-format-prefix-with-location 0 --log-format %Y-%m-%dT%T.%fZ.%l.envoy %n.%v -l warning --component-log-level misc:error --concurrency 2
 ```
 
+### Pilot-agent生成的初始配置文件
+
 `pilot-agent`根据启动参数和K8S API Server中的配置信息生成Envoy的[bootstrap](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/bootstrap/v3/bootstrap.proto#bootstrap)文件(`/etc/istio/proxy/envoy-rev0.json`)，并负责启动Envoy进程(可以看到`Envoy`进程的父进程是`pilot-agent`)；`envoy`会通过xDS接口从istiod动态获取配置文件。`envoy-rev0.json`初始配置文件结构如下：
 
 ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200914110435327-1158938665.png)
@@ -112,7 +114,7 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
     },
   ```
 
-- static_resources：配置静态资源，主要包括`clusters`和`listeners`两种资源：
+- [static_resources](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/bootstrap/v3/bootstrap.proto#config-bootstrap-v3-bootstrap-staticresources)：配置静态资源，主要包括[clusters](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/cluster/v3/cluster.proto#config-cluster-v3-cluster)和[listeners](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/listener/v3/listener.proto#config-listener-v3-listener)两种资源：
 
   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200914154659614-940913736.png)
 
@@ -165,7 +167,7 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
             }
           },
           {
-            "name": "sds-grpc",
+            "name": "sds-grpc", /* 配置SDS cluster */
             "type": "STATIC",
             "http2_protocol_options": {},
             "connect_timeout": "1s",
@@ -177,7 +179,7 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
                   "endpoint": {
                     "address":{
                       "pipe": {
-                        "path": "./etc/istio/proxy/SDS" /* UNIX socket路径*/
+                        "path": "./etc/istio/proxy/SDS" /* 进行SDS的UNIX socket路径，用于在mTLS期间给istio-agent和proxy提供通信 */
                       }
                     }
                   }
@@ -192,24 +194,24 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
             "dns_lookup_family": "V4_ONLY",
             "connect_timeout": "1s",
             "lb_policy": "ROUND_ROBIN",
-            "transport_socket": {
-              "name": "envoy.transport_sockets.tls",
+            "transport_socket": { /* 设置与上游连接的传输socket */
+              "name": "envoy.transport_sockets.tls", /* 需要实例化的传输socket名称 */
               "typed_config": {
                 "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
-                "sni": "istiod.istio-system.svc",
-                "common_tls_context": {
-                  "alpn_protocols": [
+                "sni": "istiod.istio-system.svc", /* 创建TLS后端(即SDS服务器)连接时要使用的SNI字符串 */
+                "common_tls_context": { /* 配置client和server使用的TLS上下文 */
+                  "alpn_protocols": [ /* listener暴露的ALPN协议列表 */
                     "h2"
                   ],
-                  "tls_certificate_sds_secret_configs": [ /* SDS配置 */
+                  "tls_certificate_sds_secret_configs": [ /* 通过SDS API获取TLS证书的配置 */
                     {
                       "name": "default",
-                      "sds_config": {
-                        "resource_api_version": "V3",
+                      "sds_config": { /* 配置sds_config时将会从静态资源加载secret */
+                        "resource_api_version": "V3", /* xDS的API版本 */
                         "initial_fetch_timeout": "0s",
                         "api_config_source": {
                           "api_type": "GRPC",
-                          "transport_api_version": "V3",
+                          "transport_api_version": "V3", /* xDS传输协议的API版本 */
                           "grpc_services": [
                             { /* SDS服务器对应上面配置的sds-grpc cluster */
                               "envoy_grpc": { "cluster_name": "sds-grpc" }
@@ -221,15 +223,15 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
                   ],
                   "validation_context": {
                     "trusted_ca": {
-                      "filename": "./var/run/secrets/istio/root-cert.pem" /* 挂载当前命名空间下的config istio-ca-root-cert，其中的CA证书与istio-system命名空间下的istio-ca-secret中的CA证书相同 */
+                      "filename": "./var/run/secrets/istio/root-cert.pem" /* 本地文件系统的数据源。挂载当前命名空间下的config istio-ca-root-cert，其中的CA证书与istio-system命名空间下的istio-ca-secret中的CA证书相同，用于校验对端证书 */
                     },
-                    "match_subject_alt_names": [{"exact":"istiod.istio-system.svc"}]
+                    "match_subject_alt_names": [{"exact":"istiod.istio-system.svc"}] /* 验证证书中的SAN，即来自istiod的证书 */
                   }
                 }
               }
             },
             "load_assignment": {
-              "cluster_name": "xds-grpc",
+              "cluster_name": "xds-grpc", /* 可以看到xds-grpc的后端为istiod的15012端口 */
               "endpoints": [{
                 "lb_endpoints": [{
                   "endpoint": {
@@ -264,9 +266,31 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
             "max_requests_per_connection": 1,
             "http2_protocol_options": { }
           }
+                  ,
+          {
+            "name": "zipkin", /* 分布式链路跟踪zipkin的cluster配置 */
+            "type": "STRICT_DNS",
+            "respect_dns_ttl": true,
+            "dns_lookup_family": "V4_ONLY",
+            "connect_timeout": "1s",
+            "lb_policy": "ROUND_ROBIN",
+            "load_assignment": {
+              "cluster_name": "zipkin",
+              "endpoints": [{
+                "lb_endpoints": [{
+                  "endpoint": {
+                    "address":{
+                      "socket_address": {"address": "zipkin.istio-system", "port_value": 9411}
+                    }
+                  }
+                }]
+              }]
+            }
+          }
+        ],
     ```
 
-    可以使用`istioctl pc cluster`命令查看静态cluster资源，第一列对应上面的`Cluster.name`
+    可以使用`istioctl pc cluster`命令查看静态cluster资源，第一列对应上面的`Cluster.name`，其中`sds-grpc`用于提供[SDS服务](https://www.envoyproxy.io/docs/envoy/latest/configuration/security/secret#secret-discovery-service-sds)，SDS的原理可以参见[官方文档](https://istio.io/latest/docs/concepts/security/#pki)。
 
     ```shell
     # istioctl pc cluster sleep-856d589c9b-x6szk.default |grep STATIC
@@ -277,14 +301,12 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
     sleep.default.svc.cluster.local         80        http       inbound       STATIC
     ```
 
-    
-
-  - listener：
+  - listener，下面用到了Network filter中的[HTTP connection manager](https://www.envoyproxy.io/docs/envoy/latest/api-v3/extensions/filters/network/http_connection_manager/v3/http_connection_manager.proto#http-connection-manager)
 
     ```json
         "listeners":[
           {
-            "address": {
+            "address": { /* listener监听的地址 */
               "socket_address": {
                 "protocol": "TCP",
                 "address": "0.0.0.0",
@@ -298,19 +320,19 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
                     "name": "envoy.http_connection_manager",
                     "typed_config": {
                       "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
-                      "codec_type": "AUTO",
+                      "codec_type": "AUTO", /* 由连接管理器判断使用哪种编解码器 */
                       "stat_prefix": "stats",
-                      "route_config": {
-                        "virtual_hosts": [
+                      "route_config": { /* 连接管理器的静态路由表 */
+                        "virtual_hosts": [ /* 构成路由表的虚拟主机数组 */
                           {
-                            "name": "backend",
-                            "domains": [
+                            "name": "backend", /* 在发送某些统计信息时使用的逻辑名称 */
+                            "domains": [ /* 匹配该虚拟主机的域列表 */
                               "*"
                             ],
-                            "routes": [
+                            "routes": [ /* 匹配入请求的路由列表，使用第一个匹配的路由 */
                               {
-                                "match": {
-                                  "prefix": "/stats/prometheus"
+                                "match": { /* 将HTTP地址为/stats/prometheus的请求路由到cluster prometheus_stats */
+                                  "prefix": "/stats/prometheus" 
                                 },
                                 "route": {
                                   "cluster": "prometheus_stats"
@@ -320,7 +342,7 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
                           }
                         ]
                       },
-                      "http_filters": [{
+                      "http_filters": [{ /* 构成filter链的filter，用于处理请求 */
                         "name": "envoy.router",
                         "typed_config": {
                           "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
@@ -358,7 +380,7 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
                             ],
                             "routes": [
                               {
-                                "match": {
+                                "match": { /* 将HTTP地址为/healthz/ready的请求路由到cluster agent */
                                   "prefix": "/healthz/ready"
                                 },
                                 "route": {
@@ -385,11 +407,31 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
       }
     ```
 
-    
+- tracing，对应上面static_resources里定义的zipkin cluster。
 
-  
+  ```json
+    "tracing": {
+      "http": {
+        "name": "envoy.zipkin",
+        "typed_config": {
+          "@type": "type.googleapis.com/envoy.config.trace.v3.ZipkinConfig",
+          "collector_cluster": "zipkin",
+          "collector_endpoint": "/api/v2/spans",
+          "collector_endpoint_version": "HTTP_JSON",
+          "trace_id_128bit": true,
+          "shared_span_context": false
+        }
+      }
+    }
+  ```
 
+  基本[流程](https://www.servicemesher.com/istio-handbook/concepts/sidecar-traffic-route.html)如下：
 
+  ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200915133137453-1374419547.png)
+
+### Envoy管理接口获取的完整配置
+
+可以在注入Envoy sidecar的pod中执行`curl -X POST localhost:15000/config_dump`来获取完整的配置信息。
 
 
 
