@@ -127,7 +127,7 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
             "type": "STATIC", /* 明确指定上游host的网络名(IP地址/端口等) */
             "connect_timeout": "0.250s",
             "lb_policy": "ROUND_ROBIN",
-            "load_assignment": { /* 仅用于类型为STATIC, STRICT_DNS或LOGICAL_DNS */
+            "load_assignment": { /* 仅用于类型为STATIC, STRICT_DNS或LOGICAL_DNS，用于给非EDS的clyster内嵌与EDS等同的endpoint */
               "cluster_name": "prometheus_stats", 
               "endpoints": [{
                 "lb_endpoints": [{ /* 负载均衡的后端 */
@@ -431,7 +431,337 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
 
 ### Envoy管理接口获取的完整配置
 
-可以在注入Envoy sidecar的pod中执行`curl -X POST localhost:15000/config_dump`来获取完整的配置信息。
+可以在注入Envoy sidecar的pod中执行`curl -X POST localhost:15000/config_dump`来获取完整的配置信息。可以看到它主要包含`BootstrapConfig`，`ClustersConfig`，`ListenersConfig`，`RoutesConfig`，`SecretsConfig`这5部分。
+
+![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200915133930217-895287568.png)
+
+- Bootstrap：它与上面由Pilot-agent生成的`envoy-rev0.json`文件中的内容相同，即提供给Envoy proxy的初始化配置，给出了xDS服务器的地址等信息。
+
+- Clusters：在Envoy中，Cluster是一个服务集群，每个cluster包含一个或多个endpoint(可以将cluster近似看作是k8s中的service)。
+
+  从上图可以看出，ClustersConfig包含两种cluster配置：`static_clusters`和`dynamic_active_clusters`。前者中的cluster来自envoy-rev0.json中配置的静态cluster资源，有`agent`，`prometheus_stats`，`sds-grpc`，`xds-grpc`和`zipkin`；后者是通过xDS接口从istio的控制面获取的动态配置信息，`dynamic_active_clusters`主要分为如下四种类型：
+
+  - BlackHoleCluster：
+
+    ```json
+         "cluster": {
+          "@type": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
+          "name": "BlackHoleCluster", /* cluster名称 */
+          "type": "STATIC",
+          "connect_timeout": "10s",
+          "filters": [
+           {
+            "name": "istio.metadata_exchange",
+            "typed_config": {
+             "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+             "type_url": "type.googleapis.com/envoy.tcp.metadataexchange.config.MetadataExchange",
+             "value": {
+              "protocol": "istio-peer-exchange"
+             }
+            }
+           }
+          ]
+         },
+    ```
+
+    > 在上面可以看到Istio使用的protocol `istio-peer-exchange `https://istio.io/latest/docs/tasks/observability/metrics/tcp-metrics/#tcp-attributes
+    >
+    > type.googleapis.com/envoy.extensions.filters.network.wasm.v3.Wasm  参见：https://www.tetrate.io/blog/introducing-getenvoy-extension-toolkit-for-webassembly-based-envoy-extensions/
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    
+
+    使用如下命令可以看到cluster `BlackHoleCluster`是没有endpoint的。
+
+    ```shell
+    # istioctl pc endpoint sleep-856d589c9b-x6szk.default --cluster BlackHoleCluster
+    ENDPOINT     STATUS     OUTLIER CHECK     CLUSTER
+    ```
+
+    > 如下内容参考[官方博客](https://istio.io/latest/blog/2019/monitoring-external-service-traffic/#external-and-internal-services)：
+    >
+    > 对于外部服务，Istio提供了两种管理方式：通过将`global.outboundTrafficPolicy.mode` 设置为`REGISTRY_ONLY`来block所有到外部服务的访问；以及通过将`global.outboundTrafficPolicy.mode`设置为`ALLOW_ANY`来允许所有到外部服务的访问。默认会允许所有到外部服务的访问。
+    >
+    > **BlackHoleCluster** ：当`global.outboundTrafficPolicy.mode`设置为`REGISTRY_ONLY`时，Envoy会创建一个虚拟的cluster BlackHoleCluster。该模式下，所有到外部服务的访问都会被block(除非为每个服务添加[service entries](https://istio.io/latest/docs/reference/config/networking/service-entry))。为了实现该功能，默认的outbound  listener(监听地址为 `0.0.0.0:15001`)使用[原始目的地](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/service_discovery#original-destination)来设置TCP代理，`BlackHoleCluster` 作为一个静态cluster。由于`BlackHoleCluster` 没有任何endpoint，因此会丢弃所有到外部的流量。此外，Istio会为平台服务的每个端口/协议组合创建唯一的listener，如果对同一端口的外部服务发起请求，则不会命中虚拟listener。这种情况会对route配置进行扩展，添加到`BlackHoleCluster`的路由。如果没有匹配到其他路由，则Envoy代理会直接返回502 HTTP状态码(`BlackHoleCluster`可以看作是路由黑洞)。
+    >
+    > ```json
+    >        {
+    >         "name": "block_all",
+    >         "domains": [
+    >          "*"
+    >         ],
+    >         "routes": [
+    >          {
+    >           "match": {
+    >            "prefix": "/"
+    >           },
+    >           "direct_response": {
+    >            "status": 502
+    >           },
+    >           "name": "block_all"
+    >          }
+    >         ],
+    >         "include_request_attempt_count": true
+    >        },
+    > ```
+
+  - PassthroughCluster：
+
+    ```json
+         "cluster": {
+          "@type": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
+          "name": "PassthroughCluster",
+          "type": "ORIGINAL_DST",
+          "connect_timeout": "10s",
+          "lb_policy": "CLUSTER_PROVIDED",
+          "circuit_breakers": {
+           "thresholds": [
+            {
+             "max_connections": 4294967295,
+             "max_pending_requests": 4294967295,
+             "max_requests": 4294967295,
+             "max_retries": 4294967295
+            }
+           ]
+          },
+          "protocol_selection": "USE_DOWNSTREAM_PROTOCOL",
+          "filters": [
+           {
+            "name": "istio.metadata_exchange",
+            "typed_config": {
+             "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+             "type_url": "type.googleapis.com/envoy.tcp.metadataexchange.config.MetadataExchange",
+             "value": {
+              "protocol": "istio-peer-exchange"
+             }
+            }
+           }
+          ]
+         },
+    ```
+
+    使用如下命令可以看到cluster `PassthroughCluster`是没有endpoint的。
+
+    ```shell
+    # istioctl pc endpoint sleep-856d589c9b-x6szk.default --cluster PassthroughCluster
+    ENDPOINT     STATUS     OUTLIER CHECK     CLUSTER
+    ```
+
+    > **PassthroughCluster** ：当`global.outboundTrafficPolicy.mode`设置为`ALLOW_ANY`时，Envoy会创建一个虚拟的cluster `PassthroughCluster` 。该模式下，会允许所有到外部服务的访问。为了实现该功能，默认的outbound  listener(监听地址为 `0.0.0.0:15001`)使用`SO_ORIGINAL_DST`来配置TCP Proxy，`PassthroughCluster`作为一个静态cluster。
+    >
+    > `PassthroughCluster` cluster使用[原始目的地负载均衡](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/service_discovery#original-destination)策略来配置Envoy发送到原始目的地的流量。
+    >
+    > 与`BlackHoleCluster`类似，对于每个基于端口/协议的listener，都会添加虚拟路由，将`PassthroughCluster`作为为默认路由。
+    >
+    > ```json
+    >    {
+    >     "name": "allow_any",
+    >     "domains": [
+    >      "*"
+    >     ],
+    >     "routes": [
+    >      {
+    >       "match": {
+    >        "prefix": "/"
+    >       },
+    >       "route": {
+    >        "cluster": "PassthroughCluster",
+    >        "timeout": "0s",
+    >        "max_grpc_timeout": "0s"
+    >       },
+    >       "name": "allow_any"
+    >      }
+    >     ],
+    >     "include_request_attempt_count": true
+    >    },
+    > ```
+
+    由于`global.outboundTrafficPolicy.mode`只能配置某一个值，因此`BlackHoleCluster`和`PassthroughCluster`的出现是互斥的，`BlackHoleCluster`和`PassthroughCluster`的路由仅存在istio服务网格内，即注入sidecar的pod中。
+
+    可以使用[Prometheus metrics](https://istio.io/latest/blog/2019/monitoring-external-service-traffic/#passthroughcluster-metrics)来监控到`BlackHoleCluster`和`PassthroughCluster`的访问。
+
+  - inbound cluster：处理入站请求的cluster，对于下面的sleep应用来说，其只有一个本地后端`127.0.0.1:80`
+
+    ```json
+     "cluster": {
+      "@type": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
+      "name": "inbound|80|http|sleep.default.svc.cluster.local",
+      "type": "STATIC",
+      "connect_timeout": "10s",
+      "circuit_breakers": {
+       "thresholds": [
+        {
+         "max_connections": 4294967295,
+         "max_pending_requests": 4294967295,
+         "max_requests": 4294967295,
+         "max_retries": 4294967295
+        }
+       ]
+      },
+      "load_assignment": { /* 设置cluster的endpoint的负载均衡 */
+       "cluster_name": "inbound|80|http|sleep.default.svc.cluster.local",
+       "endpoints": [
+        {
+         "lb_endpoints": [
+          {
+           "endpoint": {
+            "address": {
+             "socket_address": {
+              "address": "127.0.0.1",
+              "port_value": 80
+             }
+            }
+           }
+          }
+         ]
+        }
+       ]
+      }
+     },
+    ```
+
+    也可以使用如下命令查看inbound的cluster信息：
+
+    ```shell
+    # istioctl pc cluster sleep-856d589c9b-c6xsm.default --direction inbound
+    SERVICE FQDN                        PORT     SUBSET     DIRECTION     TYPE       DESTINATION RULE
+    sleep.default.svc.cluster.local     80       http       inbound       STATIC
+    ```
+
+  - outbound cluster：这类cluster为Envoy节点外的服务。下面的EDS表示该cluster的endpoint来自EDS服务发现。下面给出的outbound cluster是istiod的15012端口上的服务。
+
+    ```json
+    {
+     "version_info": "2020-09-15T08:05:54Z/4",
+     "cluster": {
+      "@type": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
+      "name": "outbound|15012||istiod.istio-system.svc.cluster.local",
+      "type": "EDS", 
+      "eds_cluster_config": {
+       "eds_config": {
+        "ads": {},
+        "resource_api_version": "V3"
+       },
+       "service_name": "outbound|15012||istiod.istio-system.svc.cluster.local" /* EDS的cluster的可替代名称，无需与cluster名称完全相同 */
+      },
+      "connect_timeout": "10s",
+      "circuit_breakers": { /* 断路器设置 */
+       "thresholds": [
+        {
+         "max_connections": 4294967295,
+         "max_pending_requests": 4294967295,
+         "max_requests": 4294967295,
+         "max_retries": 4294967295
+        }
+       ]
+      },
+      "filters": [ /* 过滤器设置 */
+       {
+        "name": "istio.metadata_exchange",
+        "typed_config": {
+         "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+         "type_url": "type.googleapis.com/envoy.tcp.metadataexchange.config.MetadataExchange",
+         "value": {
+          "protocol": "istio-peer-exchange"
+         }
+        }
+       }
+      ],
+      "transport_socket_matches": [
+       {
+        "name": "tlsMode-istio",
+        "match": {
+         "tlsMode": "istio"
+        },
+        "transport_socket": {
+         "name": "envoy.transport_sockets.tls",
+         "typed_config": {
+          "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
+          "common_tls_context": {
+           "alpn_protocols": [
+            "istio-peer-exchange",
+            "istio"
+           ],
+           "tls_certificate_sds_secret_configs": [
+            {
+             "name": "default",
+             "sds_config": {
+              "api_config_source": {
+               "api_type": "GRPC",
+               "grpc_services": [
+                {
+                 "envoy_grpc": {
+                  "cluster_name": "sds-grpc"
+                 }
+                }
+               ],
+               "transport_api_version": "V3"
+              },
+              "initial_fetch_timeout": "0s",
+              "resource_api_version": "V3"
+             }
+            }
+           ],
+           "combined_validation_context": {
+            "default_validation_context": {
+             "match_subject_alt_names": [
+              {
+               "exact": "spiffe://new-td/ns/istio-system/sa/istiod-service-account"
+              }
+             ]
+            },
+            "validation_context_sds_secret_config": {
+             "name": "ROOTCA",
+             "sds_config": {
+              "api_config_source": {
+               "api_type": "GRPC",
+               "grpc_services": [
+                {
+                 "envoy_grpc": {
+                  "cluster_name": "sds-grpc"
+                 }
+                }
+               ],
+               "transport_api_version": "V3"
+              },
+              "initial_fetch_timeout": "0s",
+              "resource_api_version": "V3"
+             }
+            }
+           }
+          },
+          "sni": "outbound_.15012_._.istiod.istio-system.svc.cluster.local"
+         }
+        }
+       },
+       {
+        "name": "tlsMode-disabled",
+        "match": {},
+        "transport_socket": {
+         "name": "envoy.transport_sockets.raw_buffer"
+        }
+       }
+      ]
+     },
+     "last_updated": "2020-09-15T08:06:23.565Z"
+    },
+    ```
+    
 
 
 
@@ -439,4 +769,4 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
 
 ### 参考
 
-- Istio流量管理实现机制深度解析
+- [Sidecar 流量路由机制分析](https://www.servicemesher.com/istio-handbook/concepts/sidecar-traffic-route.html)
