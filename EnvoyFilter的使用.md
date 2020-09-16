@@ -223,7 +223,7 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
                   ],
                   "validation_context": {
                     "trusted_ca": {
-                      "filename": "./var/run/secrets/istio/root-cert.pem" /* 本地文件系统的数据源。挂载当前命名空间下的config istio-ca-root-cert，其中的CA证书与istio-system命名空间下的istio-ca-secret中的CA证书相同，用于校验对端证书 */
+                      "filename": "./var/run/secrets/istio/root-cert.pem" /* 本地文件系统的数据源。挂载当前命名空间下的config istio-ca-root-cert，其中的CA证书与istio-system命名空间下的istio-ca-secret中的CA证书相同，用于校验对端istiod的证书 */
                     },
                     "match_subject_alt_names": [{"exact":"istiod.istio-system.svc"}] /* 验证证书中的SAN，即来自istiod的证书 */
                   }
@@ -464,7 +464,104 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
          },
     ```
 
-    > 在上面可以看到Istio使用的protocol `istio-peer-exchange `https://istio.io/latest/docs/tasks/observability/metrics/tcp-metrics/#tcp-attributes
+    > 在上面可以看到Istio使用了协议`istio-peer-exchange `，服务网格内部的两个Envoy实例之间使用该协议来交互Node Metadata。[NodeMetadata](https://github.com/istio/istio/blob/master/pilot/pkg/model/context.go#L418)的数据结构如下：
+    >
+    > ```go
+    > type NodeMetadata struct {
+    > 	// ProxyConfig defines the proxy config specified for a proxy.
+    > 	// Note that this setting may be configured different for each proxy, due user overrides
+    > 	// or from different versions of proxies connecting. While Pilot has access to the meshConfig.defaultConfig,
+    > 	// this field should be preferred if it is present.
+    > 	ProxyConfig *NodeMetaProxyConfig `json:"PROXY_CONFIG,omitempty"`
+    > 
+    > 	// IstioVersion specifies the Istio version associated with the proxy
+    > 	IstioVersion string `json:"ISTIO_VERSION,omitempty"`
+    > 
+    > 	// Labels specifies the set of workload instance (ex: k8s pod) labels associated with this node.
+    > 	Labels map[string]string `json:"LABELS,omitempty"`
+    > 
+    > 	// InstanceIPs is the set of IPs attached to this proxy
+    > 	InstanceIPs StringList `json:"INSTANCE_IPS,omitempty"`
+    > 
+    > 	// Namespace is the namespace in which the workload instance is running.
+    > 	Namespace string `json:"NAMESPACE,omitempty"`
+    > 
+    > 	// InterceptionMode is the name of the metadata variable that carries info about
+    > 	// traffic interception mode at the proxy
+    > 	InterceptionMode TrafficInterceptionMode `json:"INTERCEPTION_MODE,omitempty"`
+    > 
+    > 	// ServiceAccount specifies the service account which is running the workload.
+    > 	ServiceAccount string `json:"SERVICE_ACCOUNT,omitempty"`
+    > 
+    > 	// RouterMode indicates whether the proxy is functioning as a SNI-DNAT router
+    > 	// processing the AUTO_PASSTHROUGH gateway servers
+    > 	RouterMode string `json:"ROUTER_MODE,omitempty"`
+    > 
+    > 	// MeshID specifies the mesh ID environment variable.
+    > 	MeshID string `json:"MESH_ID,omitempty"`
+    > 
+    > 	// ClusterID defines the cluster the node belongs to.
+    > 	ClusterID string `json:"CLUSTER_ID,omitempty"`
+    > 
+    > 	// Network defines the network the node belongs to. It is an optional metadata,
+    > 	// set at injection time. When set, the Endpoints returned to a note and not on same network
+    > 	// will be replaced with the gateway defined in the settings.
+    > 	Network string `json:"NETWORK,omitempty"`
+    > 
+    > 	// RequestedNetworkView specifies the networks that the proxy wants to see
+    > 	RequestedNetworkView StringList `json:"REQUESTED_NETWORK_VIEW,omitempty"`
+    > 
+    > 	// PodPorts defines the ports on a pod. This is used to lookup named ports.
+    > 	PodPorts PodPortList `json:"POD_PORTS,omitempty"`
+    > 
+    > 	// TLSServerCertChain is the absolute path to server cert-chain file
+    > 	TLSServerCertChain string `json:"TLS_SERVER_CERT_CHAIN,omitempty"`
+    > 	// TLSServerKey is the absolute path to server private key file
+    > 	TLSServerKey string `json:"TLS_SERVER_KEY,omitempty"`
+    > 	// TLSServerRootCert is the absolute path to server root cert file
+    > 	TLSServerRootCert string `json:"TLS_SERVER_ROOT_CERT,omitempty"`
+    > 	// TLSClientCertChain is the absolute path to client cert-chain file
+    > 	TLSClientCertChain string `json:"TLS_CLIENT_CERT_CHAIN,omitempty"`
+    > 	// TLSClientKey is the absolute path to client private key file
+    > 	TLSClientKey string `json:"TLS_CLIENT_KEY,omitempty"`
+    > 	// TLSClientRootCert is the absolute path to client root cert file
+    > 	TLSClientRootCert string `json:"TLS_CLIENT_ROOT_CERT,omitempty"`
+    > 
+    > 	CertBaseDir string `json:"BASE,omitempty"`
+    > 
+    > 	// IdleTimeout specifies the idle timeout for the proxy, in duration format (10s).
+    > 	// If not set, no timeout is set.
+    > 	IdleTimeout string `json:"IDLE_TIMEOUT,omitempty"`
+    > 
+    > 	// HTTP10 indicates the application behind the sidecar is making outbound http requests with HTTP/1.0
+    > 	// protocol. It will enable the "AcceptHttp_10" option on the http options for outbound HTTP listeners.
+    > 	// Alpha in 1.1, based on feedback may be turned into an API or change. Set to "1" to enable.
+    > 	HTTP10 string `json:"HTTP10,omitempty"`
+    > 
+    > 	// Generator indicates the client wants to use a custom Generator plugin.
+    > 	Generator string `json:"GENERATOR,omitempty"`
+    > 
+    > 	// DNSCapture indicates whether the workload has enabled dns capture
+    > 	DNSCapture string `json:"DNS_CAPTURE,omitempty"`
+    > 
+    > 	// ProxyXDSViaAgent indicates that xds data is being proxied via the agent
+    > 	ProxyXDSViaAgent string `json:"PROXY_XDS_VIA_AGENT,omitempty"`
+    > 
+    > 	// Contains a copy of the raw metadata. This is needed to lookup arbitrary values.
+    > 	// If a value is known ahead of time it should be added to the struct rather than reading from here,
+    > 	Raw map[string]interface{} `json:"-"`
+    > }
+    > ```
+    >
+    > Istio通过一些特定的TCP属性来启用TCP策略和控制(这些属性由Envoy代理生成)，并通过Envoy的Node Metadata来获取这些属性。Envoy使用ALPN隧道和基于前缀的协议来转发Node Metadata到对端的Envoy。Istio定义了一个新的协议`istio-peer-exchange`，由网格中的客户端和服务端的sidecar在TLS协商时进行宣告并确定优先级。启用**istio代理**的两端会通过ALPN协商将协议解析为`istio-peer-exchange`(因此仅限于istio服务网格内的交互)，后续的TCP交互将会按照`istio-peer-exchange`的协议规则进行[交互](https://istio.io/latest/docs/tasks/observability/metrics/tcp-metrics/#tcp-attributes)：
+    >
+    > 
+    >
+    > ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200915210742792-369235018.png)
+    >
+    > 
+    >
+    > 
     >
     > type.googleapis.com/envoy.extensions.filters.network.wasm.v3.Wasm  参见：https://www.tetrate.io/blog/introducing-getenvoy-extension-toolkit-for-webassembly-based-envoy-extensions/
 
@@ -613,7 +710,7 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
         }
        ]
       },
-      "load_assignment": { /* 设置cluster的endpoint的负载均衡 */
+      "load_assignment": { /* 设置入站的cluster的endpoint的负载均衡 */
        "cluster_name": "inbound|80|http|sleep.default.svc.cluster.local",
        "endpoints": [
         {
@@ -652,7 +749,7 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
       "@type": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
       "name": "outbound|15012||istiod.istio-system.svc.cluster.local",
       "type": "EDS", 
-      "eds_cluster_config": {
+      "eds_cluster_config": { /* EDS的配置 */
        "eds_config": {
         "ads": {},
         "resource_api_version": "V3"
@@ -670,7 +767,7 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
         }
        ]
       },
-      "filters": [ /* 过滤器设置 */
+      "filters": [ /* 过滤器设置，设置Node Metadata交互使用的协议为istio-peer-exchange */
        {
         "name": "istio.metadata_exchange",
         "typed_config": {
@@ -682,31 +779,31 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
         }
        }
       ],
-      "transport_socket_matches": [
+      "transport_socket_matches": [ /* 指定匹配的后端使用的传输socket */
        {
-        "name": "tlsMode-istio",
-        "match": {
+        "name": "tlsMode-istio", /* match的名称 */
+        "match": { /* 匹配后端的条件，注入istio sidecar的pod会打上标签：security.istio.io/tlsMode=istio */
          "tlsMode": "istio"
         },
-        "transport_socket": {
+        "transport_socket": { /* 匹配的后端使用的传输socket的配置 */
          "name": "envoy.transport_sockets.tls",
          "typed_config": {
           "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
-          "common_tls_context": {
-           "alpn_protocols": [
+          "common_tls_context": { /* 配置client和server端使用的TLS上下文 */
+           "alpn_protocols": [ /* 配置交互使用的ALPN协议集，供上游选择 */
             "istio-peer-exchange",
             "istio"
            ],
-           "tls_certificate_sds_secret_configs": [
+           "tls_certificate_sds_secret_configs": [ /* 通过SDS API获取TLS证书的配置 */
             {
              "name": "default",
              "sds_config": {
               "api_config_source": {
                "api_type": "GRPC",
-               "grpc_services": [
+               "grpc_services": [ /* SDS的cluster */
                 {
                  "envoy_grpc": {
-                  "cluster_name": "sds-grpc"
+                  "cluster_name": "sds-grpc" /* 为上面静态配置的cluster */
                  }
                 }
                ],
@@ -717,15 +814,15 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
              }
             }
            ],
-           "combined_validation_context": {
-            "default_validation_context": {
-             "match_subject_alt_names": [
+           "combined_validation_context": { /* 包含一个CertificateValidationContext(即下面的default_validation_context)和SDS配置。当SDS服务返回动态的CertificateValidationContext时，动态和默认的CertificateValidationContext会合并为一个新的CertificateValidationContext来进行校验  */
+            "default_validation_context": { /* 配置如何认证对端istiod服务的证书 */
+             "match_subject_alt_names": [ /* Envoy会按照如下配置来校验证书中的SAN */
               {
-               "exact": "spiffe://new-td/ns/istio-system/sa/istiod-service-account"
+               "exact": "spiffe://new-td/ns/istio-system/sa/istiod-service-account" /* 与Istio配置的serviceaccount授权策略相同 */
               }
              ]
             },
-            "validation_context_sds_secret_config": {
+            "validation_context_sds_secret_config": { /* SDS配置，也是通过静态的cluster sds-grpc提供SDS API服务 */
              "name": "ROOTCA",
              "sds_config": {
               "api_config_source": {
@@ -745,12 +842,12 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
             }
            }
           },
-          "sni": "outbound_.15012_._.istiod.istio-system.svc.cluster.local"
+          "sni": "outbound_.15012_._.istiod.istio-system.svc.cluster.local" /* 创建TLS连接时使用的SNI字符串，即TLS的server_name扩展字段中的值 */
          }
         }
        },
        {
-        "name": "tlsMode-disabled",
+        "name": "tlsMode-disabled", /* 如果与没有匹配到的后端(即istio服务网格外的后端)进行通信时，则使用明文方式 */
         "match": {},
         "transport_socket": {
          "name": "envoy.transport_sockets.raw_buffer"
