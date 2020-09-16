@@ -439,7 +439,7 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
 
 - Clusters：在Envoy中，Cluster是一个服务集群，每个cluster包含一个或多个endpoint(可以将cluster近似看作是k8s中的service)。
 
-  从上图可以看出，ClustersConfig包含两种cluster配置：`static_clusters`和`dynamic_active_clusters`。前者中的cluster来自envoy-rev0.json中配置的静态cluster资源，有`agent`，`prometheus_stats`，`sds-grpc`，`xds-grpc`和`zipkin`；后者是通过xDS接口从istio的控制面获取的动态配置信息，`dynamic_active_clusters`主要分为如下四种类型：
+  从上图可以看出，ClustersConfig包含两种cluster配置：`static_clusters`和`dynamic_active_clusters`。前者中的cluster来自envoy-rev0.json中配置的静态cluster资源，包含`agent`，`prometheus_stats`，`sds-grpc`，`xds-grpc`和`zipkin`；后者是通过xDS接口从istio的控制面获取的动态配置信息，`dynamic_active_clusters`主要分为如下四种类型：
 
   - BlackHoleCluster：
 
@@ -558,30 +558,6 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
     > 
     >
     > ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200915210742792-369235018.png)
-    >
-    > 
-    >
-    > 
-    >
-    > type.googleapis.com/envoy.extensions.filters.network.wasm.v3.Wasm  参见：https://www.tetrate.io/blog/introducing-getenvoy-extension-toolkit-for-webassembly-based-envoy-extensions/
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    
-
-    
 
     使用如下命令可以看到cluster `BlackHoleCluster`是没有endpoint的。
 
@@ -740,7 +716,7 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
     sleep.default.svc.cluster.local     80       http       inbound       STATIC
     ```
 
-  - outbound cluster：这类cluster为Envoy节点外的服务。下面的EDS表示该cluster的endpoint来自EDS服务发现。下面给出的outbound cluster是istiod的15012端口上的服务。
+  - outbound cluster：这类cluster为Envoy节点外的服务，配置如何连接上游。下面的EDS表示该cluster的endpoint来自EDS服务发现。下面给出的outbound cluster是istiod的15012端口上的服务。
 
     ```json
     {
@@ -858,9 +834,100 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
      "last_updated": "2020-09-15T08:06:23.565Z"
     },
     ```
+
+- Listeners：Envoy使用listener来接收并处理下游发来的请求。与cluster类似，listener也分为静态和动态两种配置。静态配置来自Istio-agent生成的`envoy-rev0.json`文件。动态配置为：
+
+  - virtualOutbound Listener：Istio在注入sidecar时，会通过init容器来设置iptables规则，将所有对外的TCP流量拦截到本地的15001端口：
+
+    ```
+    -A ISTIO_REDIRECT -p tcp -j REDIRECT --to-ports 15001
+    ```
+
+    ```json
+        {
+         "name": "virtualOutbound",
+         "active_state": {
+          "version_info": "2020-09-15T08:05:54Z/4",
+          "listener": {
+           "@type": "type.googleapis.com/envoy.config.listener.v3.Listener",
+           "name": "virtualOutbound",
+           "address": { /* 监听器监听的地址 */
+            "socket_address": {
+             "address": "0.0.0.0",
+             "port_value": 15001
+            }
+           },
+           "filter_chains": [ /* 应用到该监听器的过滤器链 */
+            {
+             "filters": [ /* 与该监听器建立连接时使用的过滤器 */
+              {
+               "name": "istio.stats",
+               "typed_config": {
+                "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+                "type_url": "type.googleapis.com/envoy.extensions.filters.network.wasm.v3.Wasm",
+                "value": {
+                 "config": {
+                  "root_id": "stats_outbound",
+                  "vm_config": {
+                   "vm_id": "tcp_stats_outbound",
+                   "runtime": "envoy.wasm.runtime.null",
+                   "code": {
+                    "local": {
+                     "inline_string": "envoy.wasm.stats"
+                    }
+                   }
+                  },
+                  "configuration": {
+                   "@type": "type.googleapis.com/google.protobuf.StringValue",
+                   "value": "{\n  \"debug\": \"false\",\n  \"stat_prefix\": \"istio\"\n}\n"
+                  }
+                 }
+                }
+               }
+              },
+              {
+               "name": "envoy.tcp_proxy",
+               "typed_config": {
+                "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+                "stat_prefix": "PassthroughCluster",
+                "cluster": "PassthroughCluster",
+                "access_log": [
+                 {
+                  "name": "envoy.file_access_log",
+                  "typed_config": {
+                   "@type": "type.googleapis.com/envoy.extensions.access_loggers.file.v3.FileAccessLog",
+                   "path": "/dev/stdout",
+                   "format": "[%START_TIME%] \"%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%\" %RESPONSE_CODE% %RESPONSE_FLAGS% \"%DYNAMIC_METADATA(istio.mixer:status)%\" \"%UPSTREAM_TRANSPORT_FAILURE_REASON%\" %BYTES_RECEIVED% %BYTES_SENT% %DURATION% %RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% \"%REQ(X-FORWARDED-FOR)%\" \"%REQ(USER-AGENT)%\" \"%REQ(X-REQUEST-ID)%\" \"%REQ(:AUTHORITY)%\" \"%UPSTREAM_HOST%\" %UPSTREAM_CLUSTER% %UPSTREAM_LOCAL_ADDRESS% %DOWNSTREAM_LOCAL_ADDRESS% %DOWNSTREAM_REMOTE_ADDRESS% %REQUESTED_SERVER_NAME% %ROUTE_NAME%\n"
+                  }
+                 }
+                ]
+               }
+              }
+             ],
+             "name": "virtualOutbound-catchall-tcp"
+            }
+           ],
+           "hidden_envoy_deprecated_use_original_dst": true,
+           "traffic_direction": "OUTBOUND"
+          },
+          "last_updated": "2020-09-15T08:06:24.066Z"
+         }
+        },
+    ```
+
+    type.googleapis.com/envoy.extensions.filters.network.wasm.v3.Wasm  参见：https://www.tetrate.io/blog/introducing-getenvoy-extension-toolkit-for-webassembly-based-envoy-extensions/
+
+  - VirtualInbound Listener：
+
+    ```
+    -A ISTIO_IN_REDIRECT -p tcp -j REDIRECT --to-ports 15006
+    ```
+
     
 
+  - 
 
+  
 
 
 
