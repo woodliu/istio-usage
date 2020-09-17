@@ -124,7 +124,7 @@ Envoy对入站/出站请求的处理过程如下：
 
   ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200914154659614-940913736.png)
 
-  - clusters：
+  - clusters：下面给出了几个静态配置的cluster。
 
     ```json
         "clusters": [
@@ -200,22 +200,22 @@ Envoy对入站/出站请求的处理过程如下：
             "dns_lookup_family": "V4_ONLY",
             "connect_timeout": "1s",
             "lb_policy": "ROUND_ROBIN",
-            "transport_socket": { /* 设置与上游连接的传输socket */
+            "transport_socket": { /* 配置与上游连接的传输socket */
               "name": "envoy.transport_sockets.tls", /* 需要实例化的传输socket名称 */
               "typed_config": {
                 "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
                 "sni": "istiod.istio-system.svc", /* 创建TLS后端(即SDS服务器)连接时要使用的SNI字符串 */
                 "common_tls_context": { /* 配置client和server使用的TLS上下文 */
-                  "alpn_protocols": [ /* listener暴露的ALPN协议列表 */
+                  "alpn_protocols": [/* listener暴露的ALPN协议列表，如果为空，则不使用APPN */
                     "h2"
                   ],
-                  "tls_certificate_sds_secret_configs": [ /* 通过SDS API获取TLS证书的配置 */
+                  "tls_certificate_sds_secret_configs": [/*通过SDS API获取TLS证书的配置 */
                     {
                       "name": "default",
                       "sds_config": { /* 配置sds_config时将会从静态资源加载secret */
                         "resource_api_version": "V3", /* xDS的API版本 */
                         "initial_fetch_timeout": "0s",
-                        "api_config_source": {
+                        "api_config_source": { /* SDS API配置，如版本和SDS服务 */
                           "api_type": "GRPC",
                           "transport_api_version": "V3", /* xDS传输协议的API版本 */
                           "grpc_services": [
@@ -296,6 +296,8 @@ Envoy对入站/出站请求的处理过程如下：
         ],
     ```
 
+    > 上面使用`type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext `API接口来对传输socket进行配置，`sni`和`common_tls_context` 都属于结构体[UpstreamTlsContext](https://github.com/envoyproxy/envoy/blob/master/api/envoy/extensions/transport_sockets/tls/v3/tls.proto#L27)中的成员变量。
+
     可以使用`istioctl pc cluster`命令查看静态cluster资源，第一列对应上面的`Cluster.name`，其中`sds-grpc`用于提供[SDS服务](https://www.envoyproxy.io/docs/envoy/latest/configuration/security/secret#secret-discovery-service-sds)，SDS的原理可以参见[官方文档](https://istio.io/latest/docs/concepts/security/#pki)。
 
     ```shell
@@ -324,7 +326,7 @@ Envoy对入站/出站请求的处理过程如下：
                 "filters": [
                   {
                     "name": "envoy.http_connection_manager",
-                    "typed_config": {
+                    "typed_config": { /* 对扩展API的配置 */
                       "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
                       "codec_type": "AUTO", /* 由连接管理器判断使用哪种编解码器 */
                       "stat_prefix": "stats",
@@ -458,7 +460,7 @@ Envoy对入站/出站请求的处理过程如下：
           "filters": [
            {
             "name": "istio.metadata_exchange",
-            "typed_config": {
+            "typed_config": { /* 对扩展API的配置 */
              "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
              "type_url": "type.googleapis.com/envoy.tcp.metadataexchange.config.MetadataExchange",
              "value": {
@@ -470,6 +472,8 @@ Envoy对入站/出站请求的处理过程如下：
          },
     ```
 
+    > `BlackHoleCluster`使用的API类型为[type.googleapis.com/udpa.type.v1.TypedStruct](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/core/v3/extension.proto.html?highlight=typedstruct#config-core-v3-typedextensionconfig)，表示控制面缺少缺少该扩展的模式定义，client会使用[type_url](https://www.envoyproxy.io/docs/envoy/latest/configuration/overview/extension#extension-configuration)指定的API，将内容转换为类型化的配置资源。
+    >
     > 在上面可以看到Istio使用了协议`istio-peer-exchange `，服务网格内部的两个Envoy实例之间使用该协议来交互Node Metadata。[NodeMetadata](https://github.com/istio/istio/blob/master/pilot/pkg/model/context.go#L418)的数据结构如下：
     >
     > ```go
@@ -599,13 +603,13 @@ Envoy对入站/出站请求的处理过程如下：
     >        },
     > ```
 
-  - PassthroughCluster：
+  - PassthroughCluster：可以看到PassthroughCluster也使用了`istio-peer-exchange`协议来处理TCP。
 
     ```json
          "cluster": {
           "@type": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
           "name": "PassthroughCluster",
-          "type": "ORIGINAL_DST",
+          "type": "ORIGINAL_DST", /* 指定type为ORIGINAL_DST，这是一个特殊的cluster */
           "connect_timeout": "10s",
           "lb_policy": "CLUSTER_PROVIDED",
           "circuit_breakers": {
@@ -674,7 +678,7 @@ Envoy对入站/出站请求的处理过程如下：
 
     可以使用[Prometheus metrics](https://istio.io/latest/blog/2019/monitoring-external-service-traffic/#passthroughcluster-metrics)来监控到`BlackHoleCluster`和`PassthroughCluster`的访问。
 
-  - inbound cluster：处理入站请求的cluster，对于下面的sleep应用来说，其只有一个本地后端`127.0.0.1:80`
+  - inbound cluster：处理入站请求的cluster，对于下面的sleep应用来说，其只有一个本地后端`127.0.0.1:80`，并通过`load_assignment`指定了cluster名称和负载信息。
 
     ```json
      "cluster": {
@@ -722,7 +726,11 @@ Envoy对入站/出站请求的处理过程如下：
     sleep.default.svc.cluster.local     80       http       inbound       STATIC
     ```
 
-  - outbound cluster：这类cluster为Envoy节点外的服务，配置如何连接上游。下面的EDS表示该cluster的endpoint来自EDS服务发现。下面给出的outbound cluster是istiod的15012端口上的服务。
+  - outbound cluster：这类cluster为Envoy节点外的服务，配置如何连接上游。下面的EDS表示该cluster的endpoint来自EDS服务发现。下面给出的outbound cluster是istiod的15012端口上的服务。基本结构如下，`transport_socket_matches`仅在使用TLS才会出现，用于配置与TLS证书相关的信息。
+
+    ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200917162028031-1835006792.png)
+
+    具体内容如下：
 
     ```json
     {
@@ -761,7 +769,7 @@ Envoy对入站/出站请求的处理过程如下：
         }
        }
       ],
-      "transport_socket_matches": [ /* 指定匹配的后端使用的传输socket */
+      "transport_socket_matches": [ /* 指定匹配的后端使用的带TLS的传输socket */
        {
         "name": "tlsMode-istio", /* match的名称 */
         "match": { /* 匹配后端的条件，注入istio sidecar的pod会打上标签：security.istio.io/tlsMode=istio */
@@ -843,13 +851,13 @@ Envoy对入站/出站请求的处理过程如下：
 
 - Listeners：Envoy使用listener来接收并处理下游发来的请求。与cluster类似，listener也分为静态和动态两种配置。静态配置来自Istio-agent生成的`envoy-rev0.json`文件。动态配置为：
 
-  - virtualOutbound Listener：Istio在注入sidecar时，会通过init容器来设置iptables规则，将所有对外的TCP流量拦截到本地的15001端口：
+  - virtualOutbound Listener：Istio在注入sidecar时，会通过init容器来设置iptables规则，将所有出站的TCP流量拦截到本地的`15001`端口：
 
-    ```
+    ```shell
     -A ISTIO_REDIRECT -p tcp -j REDIRECT --to-ports 15001
     ```
 
-    
+    一个istio-agent配置中仅包含一个virtualOutbound listener，可以看到该listener并没有配置`transport_socket`，它的下游流量就是来自本pod的业务容器，并不需要进行TLS校验，直接将流量重定向到15001端口即可。
 
     ```json
         {
@@ -874,11 +882,11 @@ Envoy对入站/出站请求的处理过程如下：
                 "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
                 "type_url": "type.googleapis.com/envoy.extensions.filters.network.wasm.v3.Wasm",
                 "value": {
-                 "config": {
-                  "root_id": "stats_outbound",
-                  "vm_config": {
-                   "vm_id": "tcp_stats_outbound",
-                   "runtime": "envoy.wasm.runtime.null",
+                 "config": { /* Wasm插件配置 */
+                  "root_id": "stats_outbound", /* 一个VM中具有相同root_id的一组filters/services会共享相同的RootContext和Contexts，如果该字段为空，所有该字段为空的filters/services都会共享具有相同vm_id的Context(s) */
+                  "vm_config": { /* Wasm VM的配置 */
+                   "vm_id": "tcp_stats_outbound", /* 使用相同vm_id和code将使用相同的VM */
+                   "runtime": "envoy.wasm.runtime.null", /* Wasm运行时，v8或null */
                    "code": {
                     "local": {
                      "inline_string": "envoy.wasm.stats"
@@ -923,11 +931,9 @@ Envoy对入站/出站请求的处理过程如下：
         },
     ```
 
-    > 上面的envoy.tcp_proxy过滤器的cluster为`PassthroughCluster`，这是因为将`global.outboundTrafficPolicy.mode`设置为了`ALLOW_ANY`，默认可以访问外部服务。如果`global.outboundTrafficPolicy.mode`设置为了`REGISTRY_ONLY`，则此处为cluster `BlackHoleCluster`。
+    > 上面`envoy.tcp_proxy`过滤器的cluster为`PassthroughCluster`，这是因为将`global.outboundTrafficPolicy.mode`设置为了`ALLOW_ANY`，默认可以访问外部服务。如果`global.outboundTrafficPolicy.mode`设置为了`REGISTRY_ONLY`，则此处将变为cluster `BlackHoleCluster`，默认丢弃所有到外部服务的请求。
 
-    > 
-    >
-    > 上面使用wasm(WebAssembly)来记录遥测信息。但从runtime字段为`null`可以看到并没有启用。可以在安装istio的时候使用[如下参数](https://istio.io/latest/docs/reference/config/proxy_extensions/wasm_telemetry/)来启用基于Wasm的遥测。
+    > 上面使用wasm(WebAssembly)来记录遥测信息，Envoy官方文档中目前缺少对wasm的描述，可以参考开源代码的[描述](https://github.com/envoyproxy/envoy/blob/master/api/envoy/extensions/wasm/v3/wasm.proto)。从runtime字段为`null`可以看到并没有启用。可以在安装istio的时候使用[如下参数](https://istio.io/latest/docs/reference/config/proxy_extensions/wasm_telemetry/)来启用基于Wasm的遥测。
     >
     > ```shell
     > $ istioctl install --set values.telemetry.v2.metadataExchange.wasmEnabled=true --set values.telemetry.v2.prometheus.wasmEnabled=true
@@ -964,14 +970,459 @@ Envoy对入站/出站请求的处理过程如下：
     >           },
     > ```
     >
-    > 
+    > 在istio-proxy容器的`/etc/istio/extensions/`目录下可以看到wasm编译的相关程序，包含用于交换Node Metadata的`metadata-exchange-filter.wasm`和用于遥测的`stats-filter.wasm`，带`compiled`的wasm用于HTTP。
+    >
+    > ```shell
+    > $ ls
+    > metadata-exchange-filter.compiled.wasm  metadata-exchange-filter.wasm  stats-filter.compiled.wasm  stats-filter.wasm
+    > ```
+    >
+    > Istio的filter处理[示意图](https://banzaicloud.com/blog/envoy-wasm-filter/)如下：
     >
     > ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200916214116374-1209783360.png)
 
-  - VirtualInbound Listener：
+  - VirtualInbound Listener：与virtualOutbound listener类似，通过如下规则将所有入站的TCP流量重定向到15006端口
 
-    ```
+    ```shell
     -A ISTIO_IN_REDIRECT -p tcp -j REDIRECT --to-ports 15006
+    ```
+
+    下面是一个demo环境中的典型配置，可以看到对于每个监听的地址，都配置了两个过滤器：一个带transport_socket，一个不带transport_socket，分别处理使用TLS的连接和不使用TLS的连接。主要的入站监听器为：
+
+    - 处理基于IPv4的带TLS 的TCP连接
+    - 处理基于IPv4的不带TLS 的TCP连接
+    - 处理基于IPv6的带TLS 的TCP连接
+    - 处理基于IPv6的不带TLS 的TCP连接
+    - 处理基于IPv4的带TLS 的HTTP连接
+    - 处理基于IPv4的不带TLS 的HTTP连接
+    - 处理基于IPv6的带TLS 的HTTP连接
+    - 处理基于IPv6的不带TLS 的HTTP连接
+    - 处理业务的带TLS(不带TLS)的连接
+
+    ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200917145950359-961211851.png)
+
+    下面给出如下内容的inbound listener：
+
+    - 处理基于IPv4的带TLS 的TCP连接
+    - 处理基于IPv4的不带TLS 的TCP连接
+    - 处理业务的带TLS的连接
+
+    ```json
+        {
+         "name": "virtualInbound",
+         "active_state": {
+          "version_info": "2020-09-15T08:05:54Z/4",
+          "listener": {
+           "@type": "type.googleapis.com/envoy.config.listener.v3.Listener",
+           "name": "virtualInbound",
+           "address": { /* 该listener绑定的地址和端口 */
+            "socket_address": {
+             "address": "0.0.0.0",
+             "port_value": 15006
+            }
+           },
+           "filter_chains": [
+            /* 匹配所有IPV4地址，使用TLS且ALPN为istio-peer-exchange或istio的连接 */
+            {
+             "filter_chain_match": { /* 将连接匹配到该过滤器链时使用的标准 */
+              "prefix_ranges": [ /* 当listener绑定到0.0.0.0/::时匹配的IP地址和前缀长度，下面表示整个网络地址 */
+               {
+                "address_prefix": "0.0.0.0",
+                "prefix_len": 0
+               }
+              ],
+              "transport_protocol": "tls", /* 匹配的传输协议 */
+              "application_protocols": [ /* 使用的ALPN */
+               "istio-peer-exchange",
+               "istio"
+              ]
+             },
+             "filters": [
+              {
+               "name": "istio.metadata_exchange", /* 交换Node Metadata的配置 */
+               "typed_config": {
+                "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+                "type_url": "type.googleapis.com/envoy.tcp.metadataexchange.config.MetadataExchange",
+                "value": {
+                 "protocol": "istio-peer-exchange"
+                }
+               }
+              },
+              {
+               "name": "istio.stats", /* 使用wasm进行遥测的配置 */
+               "typed_config": {
+                "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+                "type_url": "type.googleapis.com/envoy.extensions.filters.network.wasm.v3.Wasm",
+                "value": {
+                 "config": {
+                  "root_id": "stats_inbound",
+                  "vm_config": {
+                   "vm_id": "tcp_stats_inbound",
+                   "runtime": "envoy.wasm.runtime.null",
+                   "code": {
+                    "local": {
+                     "inline_string": "envoy.wasm.stats"
+                    }
+                   }
+                  },
+                  "configuration": {
+                   "@type": "type.googleapis.com/google.protobuf.StringValue",
+                   "value": "{\n  \"debug\": \"false\",\n  \"stat_prefix\": \"istio\"\n}\n"
+                  }
+                 }
+                }
+               }
+              },
+              {
+               "name": "envoy.tcp_proxy", /* 配置连接上游cluster InboundPassthroughClusterIpv4时的访问日志，InboundPassthroughClusterIpv4 cluster用于处理基于IPv4的HTTP */
+               "typed_config": {
+                "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+                "stat_prefix": "InboundPassthroughClusterIpv4",
+                "cluster": "InboundPassthroughClusterIpv4",
+                "access_log": [
+                 {
+                  "name": "envoy.file_access_log",
+                  "typed_config": {
+                   "@type": "type.googleapis.com/envoy.extensions.access_loggers.file.v3.FileAccessLog",
+                   "path": "/dev/stdout",
+                   "format": "[%START_TIME%] \"%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%\" %RESPONSE_CODE% %RESPONSE_FLAGS% \"%DYNAMIC_METADATA(istio.mixer:status)%\" \"%UPSTREAM_TRANSPORT_FAILURE_REASON%\" %BYTES_RECEIVED% %BYTES_SENT% %DURATION% %RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% \"%REQ(X-FORWARDED-FOR)%\" \"%REQ(USER-AGENT)%\" \"%REQ(X-REQUEST-ID)%\" \"%REQ(:AUTHORITY)%\" \"%UPSTREAM_HOST%\" %UPSTREAM_CLUSTER% %UPSTREAM_LOCAL_ADDRESS% %DOWNSTREAM_LOCAL_ADDRESS% %DOWNSTREAM_REMOTE_ADDRESS% %REQUESTED_SERVER_NAME% %ROUTE_NAME%\n"
+                  }
+                 }
+                ]
+               }
+              }
+             ],
+             "transport_socket": { /* 匹配TLS的传输socket */
+              "name": "envoy.transport_sockets.tls",
+              "typed_config": {
+               "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext",
+               "common_tls_context": {
+                "alpn_protocols": [ /* 监听器使用的ALPN列表 */
+                 "istio-peer-exchange",
+                 "h2",
+                 "http/1.1"
+                ],
+                "tls_certificate_sds_secret_configs": [ /* 通过SDS API获取证书的配置 */
+                 {
+                  "name": "default",
+                  "sds_config": {
+                   "api_config_source": {
+                    "api_type": "GRPC",
+                    "grpc_services": [
+                     {
+                      "envoy_grpc": {
+                       "cluster_name": "sds-grpc"
+                      }
+                     }
+                    ],
+                    "transport_api_version": "V3"
+                   },
+                   "initial_fetch_timeout": "0s",
+                   "resource_api_version": "V3"
+                  }
+                 }
+                ],
+                "combined_validation_context": {
+                 "default_validation_context": { /* 对对端的证书的SAN进行认证 */
+                  "match_subject_alt_names": [ 
+                   {
+                    "prefix": "spiffe://new-td/"
+                   },
+                   {
+                    "prefix": "spiffe://old-td/"
+                   }
+                  ]
+                 },
+                 "validation_context_sds_secret_config": { /* 配置通过SDS API获取证书 */
+                  "name": "ROOTCA",
+                  "sds_config": {
+                   "api_config_source": {
+                    "api_type": "GRPC",
+                    "grpc_services": [
+                     {
+                      "envoy_grpc": {
+                       "cluster_name": "sds-grpc"
+                      }
+                     }
+                    ],
+                    "transport_api_version": "V3"
+                   },
+                   "initial_fetch_timeout": "0s",
+                   "resource_api_version": "V3"
+                  }
+                 }
+                }
+               },
+               "require_client_certificate": true
+              }
+             },
+             "name": "virtualInbound"
+            },
+            /* 与上面不同的是，此处匹配不带TLS的连接 */
+            {
+             "filter_chain_match": {
+              "prefix_ranges": [
+               {
+                "address_prefix": "0.0.0.0",
+                "prefix_len": 0
+               }
+              ]
+             },
+             "filters": [
+              {
+               "name": "istio.metadata_exchange",
+                ...
+              },
+              {
+               "name": "istio.stats",
+    			...
+              },
+              {
+               "name": "envoy.tcp_proxy",
+                ...
+              }
+             ],
+             "name": "virtualInbound"
+            },
+            ...
+            /* 应用的监听器，监听端口为HTTP 80端口 */
+            {
+             "filter_chain_match": {
+              "destination_port": 80, /* 匹配的请求的目的端口 */
+              "application_protocols": [ /* 匹配的ALPN，仅在使用TLS时使用 */
+               "istio",
+               "istio-http/1.0",
+               "istio-http/1.1",
+               "istio-h2"
+              ]
+             },
+             "filters": [
+              {
+               "name": "istio.metadata_exchange", /* 交换Node Metadata的配置 */
+                ...
+              },
+              {
+               "name": "envoy.http_connection_manager", /* HTTP连接管理过滤器 */
+               "typed_config": {
+                "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+                "stat_prefix": "inbound_0.0.0.0_80",
+                "route_config": { /* 静态路由表 */
+                 "name": "inbound|80|http|sleep.default.svc.cluster.local", /* 路由配置的名称 */
+                 "virtual_hosts": [ /* 构成路由表的虚拟主机列表 */
+                  {
+                   "name": "inbound|http|80", /* 统计时使用，与路由无关 */
+                   "domains": [ /* 匹配到该虚拟主机的域列表 */
+                    "*"
+                   ],
+                   "routes": [ /* 对入站请求的路由，将路径为"/"的HTTP请求路由到cluster inbound|80|http|sleep.default.svc.cluster.local*/
+                    {
+                     "match": {
+                      "prefix": "/"
+                     },
+                     "route": {
+                      "cluster": "inbound|80|http|sleep.default.svc.cluster.local",
+                      "timeout": "0s",
+                      "max_grpc_timeout": "0s"
+                     },
+                     "decorator": {
+                      "operation": "sleep.default.svc.cluster.local:80/*"
+                     },
+                     "name": "default" /* 路由的名称 */
+                    }
+                   ]
+                  }
+                 ],
+                 "validate_clusters": false
+                },
+                "http_filters": [ /* HTTP连接过滤器链 */
+                 {
+                  "name": "istio.metadata_exchange", /* 基于HTTP的Metadata的交换配置 */
+                  "typed_config": {
+                   "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+                   "type_url": "type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm",
+                   "value": {
+                    "config": {
+                     "vm_config": {
+                      "runtime": "envoy.wasm.runtime.null",
+                      "code": {
+                       "local": {
+                        "inline_string": "envoy.wasm.metadata_exchange"
+                       }
+                      }
+                     },
+                     "configuration": {
+                      "@type": "type.googleapis.com/google.protobuf.StringValue",
+                      "value": "{}\n"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "name": "istio_authn",
+                  "typed_config": {
+                   "@type": "type.googleapis.com/istio.envoy.config.filter.http.authn.v2alpha1.FilterConfig",
+                   "policy": {
+                    "peers": [
+                     {
+                      "mtls": {
+                       "mode": "PERMISSIVE"
+                      }
+                     }
+                    ]
+                   },
+                   "skip_validate_trust_domain": true
+                  }
+                 },
+                 {
+                  "name": "envoy.filters.http.cors",
+                  "typed_config": {
+                   "@type": "type.googleapis.com/envoy.extensions.filters.http.cors.v3.Cors"
+                  }
+                 },
+                 {
+                  "name": "envoy.fault",
+                  "typed_config": {
+                   "@type": "type.googleapis.com/envoy.extensions.filters.http.fault.v3.HTTPFault"
+                  }
+                 },
+                 {
+                  "name": "istio.stats",
+                  "typed_config": {
+                   "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+                   "type_url": "type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm",
+                   "value": {
+                    "config": {
+                     "root_id": "stats_inbound",
+                     "vm_config": {
+                      "vm_id": "stats_inbound",
+                      "runtime": "envoy.wasm.runtime.null",
+                      "code": {
+                       "local": {
+                        "inline_string": "envoy.wasm.stats"
+                       }
+                      }
+                     },
+                     "configuration": {
+                      "@type": "type.googleapis.com/google.protobuf.StringValue",
+                      "value": "{\n  \"debug\": \"false\",\n  \"stat_prefix\": \"istio\"\n}\n"
+                     }
+                    }
+                   }
+                  }
+                 },
+                 {
+                  "name": "envoy.router",
+                  "typed_config": {
+                   "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
+                  }
+                 }
+                ],
+                "tracing": {
+                 "client_sampling": {
+                  "value": 100
+                 },
+                 "random_sampling": {
+                  "value": 1
+                 },
+                 "overall_sampling": {
+                  "value": 100
+                 }
+                },
+                "server_name": "istio-envoy",
+                "access_log": [
+                 {
+                  "name": "envoy.file_access_log",
+                  "typed_config": {
+                   "@type": "type.googleapis.com/envoy.extensions.access_loggers.file.v3.FileAccessLog",
+                   "path": "/dev/stdout",
+                   "format": "[%START_TIME%] \"%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%\" %RESPONSE_CODE% %RESPONSE_FLAGS% \"%DYNAMIC_METADATA(istio.mixer:status)%\" \"%UPSTREAM_TRANSPORT_FAILURE_REASON%\" %BYTES_RECEIVED% %BYTES_SENT% %DURATION% %RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% \"%REQ(X-FORWARDED-FOR)%\" \"%REQ(USER-AGENT)%\" \"%REQ(X-REQUEST-ID)%\" \"%REQ(:AUTHORITY)%\" \"%UPSTREAM_HOST%\" %UPSTREAM_CLUSTER% %UPSTREAM_LOCAL_ADDRESS% %DOWNSTREAM_LOCAL_ADDRESS% %DOWNSTREAM_REMOTE_ADDRESS% %REQUESTED_SERVER_NAME% %ROUTE_NAME%\n"
+                  }
+                 }
+                ],
+                "use_remote_address": false,
+                "generate_request_id": true,
+                "forward_client_cert_details": "APPEND_FORWARD",
+                "set_current_client_cert_details": {
+                 "subject": true,
+                 "dns": true,
+                 "uri": true
+                },
+                "upgrade_configs": [
+                 {
+                  "upgrade_type": "websocket"
+                 }
+                ],
+                "stream_idle_timeout": "0s",
+                "normalize_path": true
+               }
+              }
+             ],
+             "transport_socket": {
+              "name": "envoy.transport_sockets.tls",
+              "typed_config": {
+               "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext",
+               "common_tls_context": {
+                "alpn_protocols": [
+                 "h2",
+                 "http/1.1"
+                ],
+                "tls_certificate_sds_secret_configs": [
+                 {
+                  "name": "default",
+                  "sds_config": {
+                   "api_config_source": {
+                    "api_type": "GRPC",
+                    "grpc_services": [
+                     {
+                      "envoy_grpc": {
+                       "cluster_name": "sds-grpc"
+                      }
+                     }
+                    ],
+                    "transport_api_version": "V3"
+                   },
+                   "initial_fetch_timeout": "0s",
+                   "resource_api_version": "V3"
+                  }
+                 }
+                ],
+                "combined_validation_context": {
+                 "default_validation_context": {
+                  "match_subject_alt_names": [
+                   {
+                    "prefix": "spiffe://new-td/"
+                   },
+                   {
+                    "prefix": "spiffe://old-td/"
+                   }
+                  ]
+                 },
+                 "validation_context_sds_secret_config": {
+                  "name": "ROOTCA",
+                  "sds_config": {
+                   "api_config_source": {
+                    "api_type": "GRPC",
+                    "grpc_services": [
+                     {
+                      "envoy_grpc": {
+                       "cluster_name": "sds-grpc"
+                      }
+                     }
+                    ],
+                    "transport_api_version": "V3"
+                   },
+                   "initial_fetch_timeout": "0s",
+                   "resource_api_version": "V3"
+                  }
+                 }
+                }
+               },
+               "require_client_certificate": true
+              }
+             },
+             "name": "0.0.0.0_80"
+            },
     ```
 
     
