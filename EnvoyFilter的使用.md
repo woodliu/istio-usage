@@ -53,6 +53,12 @@ istio-p+       1       0  0 Sep10 ?        00:03:39 /usr/local/bin/pilot-agent p
 istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/istio/proxy/envoy-rev0.json --restart-epoch 0 --drain-time-s 45 --parent-shutdown-time-s 60 --service-cluster sleep.default --service-node sidecar~10.80.3.109~sleep-856d589c9b-x6szk.default~default.svc.cluster.local --local-address-ip-version v4 --log-format-prefix-with-location 0 --log-format %Y-%m-%dT%T.%fZ.%l.envoy %n.%v -l warning --component-log-level misc:error --concurrency 2
 ```
 
+### Envoy架构
+
+Envoy对入站/出站请求的处理过程如下：
+
+![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200916144803520-1592409597.png)
+
 ### Pilot-agent生成的初始配置文件
 
 `pilot-agent`根据启动参数和K8S API Server中的配置信息生成Envoy的[bootstrap](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/bootstrap/v3/bootstrap.proto#bootstrap)文件(`/etc/istio/proxy/envoy-rev0.json`)，并负责启动Envoy进程(可以看到`Envoy`进程的父进程是`pilot-agent`)；`envoy`会通过xDS接口从istiod动态获取配置文件。`envoy-rev0.json`初始配置文件结构如下：
@@ -615,7 +621,7 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
           "protocol_selection": "USE_DOWNSTREAM_PROTOCOL",
           "filters": [
            {
-            "name": "istio.metadata_exchange",
+            "name": "istio.metadata_exchange", /* 使用ALPN交换Node Metadata */
             "typed_config": {
              "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
              "type_url": "type.googleapis.com/envoy.tcp.metadataexchange.config.MetadataExchange",
@@ -843,6 +849,8 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
     -A ISTIO_REDIRECT -p tcp -j REDIRECT --to-ports 15001
     ```
 
+    
+
     ```json
         {
          "name": "virtualOutbound",
@@ -859,7 +867,7 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
            },
            "filter_chains": [ /* 应用到该监听器的过滤器链 */
             {
-             "filters": [ /* 与该监听器建立连接时使用的过滤器 */
+             "filters": [ /* 与该监听器建立连接时使用的过滤器，按顺序处理各个过滤器。如果过滤器列表为空，则默认会关闭连接 */
               {
                "name": "istio.stats",
                "typed_config": {
@@ -890,11 +898,11 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
                "typed_config": {
                 "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
                 "stat_prefix": "PassthroughCluster",
-                "cluster": "PassthroughCluster",
+                "cluster": "PassthroughCluster", /* 连接的上游cluster */
                 "access_log": [
                  {
                   "name": "envoy.file_access_log",
-                  "typed_config": {
+                  "typed_config": { /* 配置日志的输出格式和路径 */
                    "@type": "type.googleapis.com/envoy.extensions.access_loggers.file.v3.FileAccessLog",
                    "path": "/dev/stdout",
                    "format": "[%START_TIME%] \"%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%\" %RESPONSE_CODE% %RESPONSE_FLAGS% \"%DYNAMIC_METADATA(istio.mixer:status)%\" \"%UPSTREAM_TRANSPORT_FAILURE_REASON%\" %BYTES_RECEIVED% %BYTES_SENT% %DURATION% %RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% \"%REQ(X-FORWARDED-FOR)%\" \"%REQ(USER-AGENT)%\" \"%REQ(X-REQUEST-ID)%\" \"%REQ(:AUTHORITY)%\" \"%UPSTREAM_HOST%\" %UPSTREAM_CLUSTER% %UPSTREAM_LOCAL_ADDRESS% %DOWNSTREAM_LOCAL_ADDRESS% %DOWNSTREAM_REMOTE_ADDRESS% %REQUESTED_SERVER_NAME% %ROUTE_NAME%\n"
@@ -915,7 +923,50 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
         },
     ```
 
-    type.googleapis.com/envoy.extensions.filters.network.wasm.v3.Wasm  参见：https://www.tetrate.io/blog/introducing-getenvoy-extension-toolkit-for-webassembly-based-envoy-extensions/
+    > 上面的envoy.tcp_proxy过滤器的cluster为`PassthroughCluster`，这是因为将`global.outboundTrafficPolicy.mode`设置为了`ALLOW_ANY`，默认可以访问外部服务。如果`global.outboundTrafficPolicy.mode`设置为了`REGISTRY_ONLY`，则此处为cluster `BlackHoleCluster`。
+
+    > 
+    >
+    > 上面使用wasm(WebAssembly)来记录遥测信息。但从runtime字段为`null`可以看到并没有启用。可以在安装istio的时候使用[如下参数](https://istio.io/latest/docs/reference/config/proxy_extensions/wasm_telemetry/)来启用基于Wasm的遥测。
+    >
+    > ```shell
+    > $ istioctl install --set values.telemetry.v2.metadataExchange.wasmEnabled=true --set values.telemetry.v2.prometheus.wasmEnabled=true
+    > ```
+    >
+    > 启用之后，与wasm有关的用于遥测的过滤器配置变为了如下内容，可以看到其runtime使用了[envoy.wasm.runtime.v8](https://v8.dev/)。更多参见官方[博客](https://istio.io/latest/blog/2020/wasm-announce/)。
+    >
+    > ```json
+    >           {
+    >            "name": "istio.stats",
+    >            "typed_config": {
+    >             "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+    >             "type_url": "type.googleapis.com/envoy.extensions.filters.network.wasm.v3.Wasm",
+    >             "value": {
+    >              "config": {
+    >               "root_id": "stats_outbound",
+    >               "vm_config": { /* wasm虚拟机配置 */
+    >                "vm_id": "tcp_stats_outbound",
+    >                "runtime": "envoy.wasm.runtime.v8", /* 使用的wasm runtime */
+    >                "code": {
+    >                 "local": {
+    >                  "filename": "/etc/istio/extensions/stats-filter.compiled.wasm" /* 编译后的wasm插件路径 */
+    >                 }
+    >                },
+    >                "allow_precompiled": true
+    >               },
+    >               "configuration": {
+    >                "@type": "type.googleapis.com/google.protobuf.StringValue",
+    >                "value": "{\n  \"debug\": \"false\",\n  \"stat_prefix\": \"istio\"\n}\n"
+    >               }
+    >              }
+    >             }
+    >            }
+    >           },
+    > ```
+    >
+    > 
+    >
+    > ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200916214116374-1209783360.png)
 
   - VirtualInbound Listener：
 
@@ -934,3 +985,8 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
 ### 参考
 
 - [Sidecar 流量路由机制分析](https://www.servicemesher.com/istio-handbook/concepts/sidecar-traffic-route.html)
+- [WebAssembly在Envoy与Istio中的应用](https://www.servicemesher.com/blog/redefining-extensibility-in-proxies/)
+- [Istio1.5 & Envoy 数据面 WASM 实践](https://www.servicemesher.com/blog/202004-istio-envoy-wasm/)
+- [How to write WASM filters for Envoy and deploy it with Istio](https://banzaicloud.com/blog/envoy-wasm-filter/)
+- [Implementing Filters in Envoy](https://medium.com/@alishananda/implementing-filters-in-envoy-dcd8fc2d8fda)
+
