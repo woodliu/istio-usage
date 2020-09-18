@@ -331,9 +331,9 @@ Envoy对入站/出站请求的处理过程如下：
                       "codec_type": "AUTO", /* 由连接管理器判断使用哪种编解码器 */
                       "stat_prefix": "stats",
                       "route_config": { /* 连接管理器的静态路由表 */
-                        "virtual_hosts": [ /* 构成路由表的虚拟主机数组 */
+                        "virtual_hosts": [ /* 路由表使用的虚拟主机列表 */
                           {
-                            "name": "backend", /* 在发送某些统计信息时使用的逻辑名称 */
+                            "name": "backend", /* 路由表使用的虚拟主机 */
                             "domains": [ /* 匹配该虚拟主机的域列表 */
                               "*"
                             ],
@@ -379,7 +379,7 @@ Envoy对入站/出站请求的处理过程如下：
                       "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
                       "codec_type": "AUTO",
                       "stat_prefix": "agent",
-                      "route_config": {
+                      "route_config": { /* 静态路由表配置 */
                         "virtual_hosts": [
                           {
                             "name": "backend",
@@ -857,7 +857,7 @@ Envoy对入站/出站请求的处理过程如下：
     -A ISTIO_REDIRECT -p tcp -j REDIRECT --to-ports 15001
     ```
 
-    一个istio-agent配置中仅包含一个virtualOutbound listener，可以看到该listener并没有配置`transport_socket`，它的下游流量就是来自本pod的业务容器，并不需要进行TLS校验，直接将流量重定向到15001端口即可。
+    一个istio-agent配置中仅包含一个virtualOutbound listener，可以看到该listener并没有配置`transport_socket`，它的下游流量就是来自本pod的业务容器，并不需要进行TLS校验，直接将流量重定向到15001端口即可，然后转发给和原始目的IP:Port匹配的listener。
 
     ```json
         {
@@ -981,13 +981,13 @@ Envoy对入站/出站请求的处理过程如下：
     >
     > ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200916214116374-1209783360.png)
 
-  - VirtualInbound Listener：与virtualOutbound listener类似，通过如下规则将所有入站的TCP流量重定向到15006端口
+  - VirtualInbound/Inbound Listener：与virtualOutbound listener类似，通过如下规则将所有入站的TCP流量重定向到15006端口
 
     ```shell
     -A ISTIO_IN_REDIRECT -p tcp -j REDIRECT --to-ports 15006
     ```
 
-    下面是一个demo环境中的典型配置，可以看到对于每个监听的地址，都配置了两个过滤器：一个带transport_socket，一个不带transport_socket，分别处理使用TLS的连接和不使用TLS的连接。主要的入站监听器为：
+    下面是一个demo环境中的典型配置，可以看到对于每个监听的地址，都配置了两个过滤器：一个带`transport_socket`，一个不带`transport_socket`，分别处理使用TLS的连接和不使用TLS的连接。主要的入站监听器为：
 
     - 处理基于IPv4的带TLS 的TCP连接
     - 处理基于IPv4的不带TLS 的TCP连接
@@ -1210,7 +1210,7 @@ Envoy对入站/出站请求的处理过程如下：
                  "name": "inbound|80|http|sleep.default.svc.cluster.local", /* 路由配置的名称 */
                  "virtual_hosts": [ /* 构成路由表的虚拟主机列表 */
                   {
-                   "name": "inbound|http|80", /* 统计时使用，与路由无关 */
+                   "name": "inbound|http|80", /* 构成路由表的虚拟主机名 */
                    "domains": [ /* 匹配到该虚拟主机的域列表 */
                     "*"
                    ],
@@ -1237,29 +1237,10 @@ Envoy对入站/出站请求的处理过程如下：
                 "http_filters": [ /* HTTP连接过滤器链 */
                  {
                   "name": "istio.metadata_exchange", /* 基于HTTP的Metadata的交换配置 */
-                  "typed_config": {
-                   "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
-                   "type_url": "type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm",
-                   "value": {
-                    "config": {
-                     "vm_config": {
-                      "runtime": "envoy.wasm.runtime.null",
-                      "code": {
-                       "local": {
-                        "inline_string": "envoy.wasm.metadata_exchange"
-                       }
-                      }
-                     },
-                     "configuration": {
-                      "@type": "type.googleapis.com/google.protobuf.StringValue",
-                      "value": "{}\n"
-                     }
-                    }
-                   }
-                  }
+    			   ...
                  },
                  {
-                  "name": "istio_authn",
+                  "name": "istio_authn", /* istio的mTLS的默认值 */
                   "typed_config": {
                    "@type": "type.googleapis.com/istio.envoy.config.filter.http.authn.v2alpha1.FilterConfig",
                    "policy": {
@@ -1287,29 +1268,8 @@ Envoy对入站/出站请求的处理过程如下：
                   }
                  },
                  {
-                  "name": "istio.stats",
-                  "typed_config": {
-                   "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
-                   "type_url": "type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm",
-                   "value": {
-                    "config": {
-                     "root_id": "stats_inbound",
-                     "vm_config": {
-                      "vm_id": "stats_inbound",
-                      "runtime": "envoy.wasm.runtime.null",
-                      "code": {
-                       "local": {
-                        "inline_string": "envoy.wasm.stats"
-                       }
-                      }
-                     },
-                     "configuration": {
-                      "@type": "type.googleapis.com/google.protobuf.StringValue",
-                      "value": "{\n  \"debug\": \"false\",\n  \"stat_prefix\": \"istio\"\n}\n"
-                     }
-                    }
-                   }
-                  }
+                  "name": "istio.stats", /* 基于HTTP的遥测配置 */
+                   ...
                  },
                  {
                   "name": "envoy.router",
@@ -1329,15 +1289,11 @@ Envoy对入站/出站请求的处理过程如下：
                   "value": 100
                  }
                 },
-                "server_name": "istio-envoy",
+                "server_name": "istio-envoy", /* 设置访问日志格式 */
                 "access_log": [
                  {
                   "name": "envoy.file_access_log",
-                  "typed_config": {
-                   "@type": "type.googleapis.com/envoy.extensions.access_loggers.file.v3.FileAccessLog",
-                   "path": "/dev/stdout",
-                   "format": "[%START_TIME%] \"%REQ(:METHOD)% %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)% %PROTOCOL%\" %RESPONSE_CODE% %RESPONSE_FLAGS% \"%DYNAMIC_METADATA(istio.mixer:status)%\" \"%UPSTREAM_TRANSPORT_FAILURE_REASON%\" %BYTES_RECEIVED% %BYTES_SENT% %DURATION% %RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% \"%REQ(X-FORWARDED-FOR)%\" \"%REQ(USER-AGENT)%\" \"%REQ(X-REQUEST-ID)%\" \"%REQ(:AUTHORITY)%\" \"%UPSTREAM_HOST%\" %UPSTREAM_CLUSTER% %UPSTREAM_LOCAL_ADDRESS% %DOWNSTREAM_LOCAL_ADDRESS% %DOWNSTREAM_REMOTE_ADDRESS% %REQUESTED_SERVER_NAME% %ROUTE_NAME%\n"
-                  }
+                   ...
                  }
                 ],
                 "use_remote_address": false,
@@ -1358,78 +1314,256 @@ Envoy对入站/出站请求的处理过程如下：
                }
               }
              ],
-             "transport_socket": {
+             "transport_socket": { /* TLS传输socket配置 */
               "name": "envoy.transport_sockets.tls",
-              "typed_config": {
-               "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext",
-               "common_tls_context": {
-                "alpn_protocols": [
-                 "h2",
-                 "http/1.1"
-                ],
-                "tls_certificate_sds_secret_configs": [
-                 {
-                  "name": "default",
-                  "sds_config": {
-                   "api_config_source": {
-                    "api_type": "GRPC",
-                    "grpc_services": [
-                     {
-                      "envoy_grpc": {
-                       "cluster_name": "sds-grpc"
-                      }
-                     }
-                    ],
-                    "transport_api_version": "V3"
-                   },
-                   "initial_fetch_timeout": "0s",
-                   "resource_api_version": "V3"
-                  }
-                 }
-                ],
-                "combined_validation_context": {
-                 "default_validation_context": {
-                  "match_subject_alt_names": [
-                   {
-                    "prefix": "spiffe://new-td/"
-                   },
-                   {
-                    "prefix": "spiffe://old-td/"
-                   }
-                  ]
-                 },
-                 "validation_context_sds_secret_config": {
-                  "name": "ROOTCA",
-                  "sds_config": {
-                   "api_config_source": {
-                    "api_type": "GRPC",
-                    "grpc_services": [
-                     {
-                      "envoy_grpc": {
-                       "cluster_name": "sds-grpc"
-                      }
-                     }
-                    ],
-                    "transport_api_version": "V3"
-                   },
-                   "initial_fetch_timeout": "0s",
-                   "resource_api_version": "V3"
-                  }
-                 }
-                }
-               },
-               "require_client_certificate": true
-              }
+               ...
              },
              "name": "0.0.0.0_80"
             },
     ```
 
+  - Outbound listener: 下面是到Prometheus服务9092端口的outbound listener。`10.84.30.227`为Prometheus的k8s service地址，指定了后端的cluster `outbound|9092||prometheus-k8s.openshift-monitoring.svc.cluster.local`。`route_config_name`字段指定了该listener使用的route `prometheus-k8s.openshift-monitoring.svc.cluster.local:9092`。
+
+    ```json
+        {
+         "name": "10.84.30.227_9092",
+         "active_state": {
+          "version_info": "2020-09-15T08:05:54Z/4",
+          "listener": {
+           "@type": "type.googleapis.com/envoy.config.listener.v3.Listener",
+           "name": "10.84.30.227_9092",
+           "address": {
+            "socket_address": {
+             "address": "10.84.30.227",
+             "port_value": 9092
+            }
+           },
+           "filter_chains": [
+            {
+             "filters": [
+              {
+               "name": "istio.stats",
+               "typed_config": {
+                "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+                "type_url": "type.googleapis.com/envoy.extensions.filters.network.wasm.v3.Wasm",
+                ...
+               }
+              },
+              {
+               "name": "envoy.tcp_proxy",/* 配置TCP连接 */
+               "typed_config": {
+                "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+                "stat_prefix": "outbound|9092||prometheus-k8s.openshift-monitoring.svc.cluster.local",
+                "cluster": "outbound|9092||prometheus-k8s.openshift-monitoring.svc.cluster.local",
+                "access_log": [
+                 {
+                  "name": "envoy.file_access_log",
+                  ...
+                 }
+                ]
+               }
+              }
+             ]
+            },
+            {
+             "filter_chain_match": {
+              "application_protocols": [
+               "http/1.0",
+               "http/1.1",
+               "h2c"
+              ]
+             },
+             "filters": [
+              {
+               "name": "envoy.http_connection_manager", /* 配置HTTP连接 */
+               "typed_config": {
+                "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+                "stat_prefix": "outbound_10.84.30.227_9092",
+                "rds": {
+                 "config_source": {
+                  "ads": {},
+                  "resource_api_version": "V3"
+                 },
+                 "route_config_name": "prometheus-k8s.openshift-monitoring.svc.cluster.local:9092" /* 指定路由配置 */
+                },
+                "http_filters": [
+                 {
+                  "name": "istio.metadata_exchange",
+                  "typed_config": {
+                   "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+                   "type_url": "type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm",
+                   ...
+                  }
+                 },
+                 {
+                  "name": "istio.alpn",
+                  "typed_config": {
+                   "@type": "type.googleapis.com/istio.envoy.config.filter.http.alpn.v2alpha1.FilterConfig",
+                   "alpn_override": [
+                    {
+                     "alpn_override": [
+                      "istio-http/1.0",
+                      "istio"
+                     ]
+                    },
+                    {
+                     "upstream_protocol": "HTTP11",
+                     "alpn_override": [
+                      "istio-http/1.1",
+                      "istio"
+                     ]
+                    },
+                    {
+                     "upstream_protocol": "HTTP2",
+                     "alpn_override": [
+                      "istio-h2",
+                      "istio"
+                     ]
+                    }
+                   ]
+                  }
+                 },
+                 {
+                  "name": "envoy.filters.http.cors",
+                  "typed_config": {
+                   "@type": "type.googleapis.com/envoy.extensions.filters.http.cors.v3.Cors"
+                  }
+                 },
+                 {
+                  "name": "envoy.fault",
+                  "typed_config": {
+                   "@type": "type.googleapis.com/envoy.extensions.filters.http.fault.v3.HTTPFault"
+                  }
+                 },
+                 {
+                  "name": "istio.stats",
+                  "typed_config": {
+                   "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
+                   "type_url": "type.googleapis.com/envoy.extensions.filters.http.wasm.v3.Wasm",
+                   ...
+                  }
+                 },
+                 {
+                  "name": "envoy.router",
+                  "typed_config": {
+                   "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
+                  }
+                 }
+                ],
+                "tracing": {
+                 ...
+                },
+                "access_log": [
+                 {
+                  "name": "envoy.file_access_log",
+                  ...
+                  }
+                 }
+                ],
+                "use_remote_address": false,
+                "generate_request_id": true,
+                "upgrade_configs": [
+                 {
+                  "upgrade_type": "websocket"
+                 }
+                ],
+                "stream_idle_timeout": "0s",
+                "normalize_path": true
+               }
+              }
+             ]
+            }
+           ],
+           "deprecated_v1": {
+            "bind_to_port": false
+           },
+           "listener_filters": [
+            {
+             "name": "envoy.listener.tls_inspector",
+             "typed_config": {
+              "@type": "type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector"
+             }
+            },
+            {
+             "name": "envoy.listener.http_inspector",
+             "typed_config": {
+              "@type": "type.googleapis.com/envoy.extensions.filters.listener.http_inspector.v3.HttpInspector"
+             }
+            }
+           ],
+           "listener_filters_timeout": "5s",
+           "traffic_direction": "OUTBOUND",
+           "continue_on_listener_filters_timeout": true
+          },
+          "last_updated": "2020-09-15T08:06:23.989Z"
+         }
+        },
+    ```
+
     
 
-  - 
+  - Route：Istio的route也分为静态配置和动态配置。静态路由配置与静态监听器，以及inbound 动态监听器中设置的**静态路由配置**(`envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager`中的`route_config`)有关。
 
-  
+    下面看一个与Prometheus 9092端口提供的服务有关的动态路由，路由配置名称route_config.name与上面Prometheus outbound监听器`route_config_name`字段指定的值是相同的。
+
+    ```json
+        {
+         "version_info": "2020-09-16T07:48:42Z/22",
+         "route_config": {
+          "@type": "type.googleapis.com/envoy.config.route.v3.RouteConfiguration",
+          "name": "prometheus-k8s.openshift-monitoring.svc.cluster.local:9092",
+          "virtual_hosts": [
+           {
+            "name": "prometheus-k8s.openshift-monitoring.svc.cluster.local:9092",
+            "domains": [
+             "prometheus-k8s.openshift-monitoring.svc.cluster.local",
+             "prometheus-k8s.openshift-monitoring.svc.cluster.local:9092",
+             "prometheus-k8s.openshift-monitoring",
+             "prometheus-k8s.openshift-monitoring:9092",
+             "prometheus-k8s.openshift-monitoring.svc.cluster",
+             "prometheus-k8s.openshift-monitoring.svc.cluster:9092",
+             "prometheus-k8s.openshift-monitoring.svc",
+             "prometheus-k8s.openshift-monitoring.svc:9092",
+             "10.84.30.227",
+             "10.84.30.227:9092"
+            ],
+            "routes": [
+             {
+              "match": {
+               "prefix": "/"
+              },
+              "route": { /* 路由到的后端cluster */
+               "cluster": "outbound|9092||prometheus-k8s.openshift-monitoring.svc.cluster.local",
+               "timeout": "0s",
+               "retry_policy": {
+                "retry_on": "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes",
+                "num_retries": 2,
+                "retry_host_predicate": [
+                 {
+                  "name": "envoy.retry_host_predicates.previous_hosts"
+                 }
+                ],
+                "host_selection_retry_max_attempts": "5",
+                "retriable_status_codes": [
+                 503
+                ]
+               },
+               "max_grpc_timeout": "0s"
+              },
+              "decorator": {
+               "operation": "prometheus-k8s.openshift-monitoring.svc.cluster.local:9092/*"
+              },
+              "name": "default"
+             }
+            ],
+            "include_request_attempt_count": true
+           }
+          ],
+          "validate_clusters": false
+         },
+         "last_updated": "2020-09-16T07:49:52.551Z"
+        },
+    ```
 
 
 
