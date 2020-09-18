@@ -1,4 +1,4 @@
-EnvoyFilter的使用
+## Istio中的流量配置
 
 [TOC]
 
@@ -55,7 +55,7 @@ istio-p+      27       1  0 Sep10 ?        00:14:30 /usr/local/bin/envoy -c etc/
 
 ### Envoy架构
 
-Envoy对入站/出站请求的处理过程如下：
+Envoy对入站/出站请求的处理过程如下，Envoy按照如下顺序依次在各个过滤器中处理请求。
 
 ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200916144803520-1592409597.png)
 
@@ -350,7 +350,7 @@ Envoy对入站/出站请求的处理过程如下：
                           }
                         ]
                       },
-                      "http_filters": [{ /* 构成filter链的filter，用于处理请求 */
+                      "http_filters": [{ /* 构成filter链的filter，用于处理请求。此处并没有定义任何规则 */
                         "name": "envoy.router",
                         "typed_config": {
                           "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
@@ -457,7 +457,7 @@ Envoy对入站/出站请求的处理过程如下：
           "name": "BlackHoleCluster", /* cluster名称 */
           "type": "STATIC",
           "connect_timeout": "10s",
-          "filters": [
+          "filters": [ /* 出站连接的过滤器配置 */
            {
             "name": "istio.metadata_exchange",
             "typed_config": { /* 对扩展API的配置 */
@@ -625,7 +625,7 @@ Envoy对入站/出站请求的处理过程如下：
           "protocol_selection": "USE_DOWNSTREAM_PROTOCOL",
           "filters": [
            {
-            "name": "istio.metadata_exchange", /* 使用ALPN交换Node Metadata */
+            "name": "istio.metadata_exchange", /* 配置使用ALPN istio-peer-exchange协议来交换Node Metadata */
             "typed_config": {
              "@type": "type.googleapis.com/udpa.type.v1.TypedStruct",
              "type_url": "type.googleapis.com/envoy.tcp.metadataexchange.config.MetadataExchange",
@@ -678,7 +678,7 @@ Envoy对入站/出站请求的处理过程如下：
 
     可以使用[Prometheus metrics](https://istio.io/latest/blog/2019/monitoring-external-service-traffic/#passthroughcluster-metrics)来监控到`BlackHoleCluster`和`PassthroughCluster`的访问。
 
-  - inbound cluster：处理入站请求的cluster，对于下面的sleep应用来说，其只有一个本地后端`127.0.0.1:80`，并通过`load_assignment`指定了cluster名称和负载信息。
+  - inbound cluster：处理入站请求的cluster，对于下面的sleep应用来说，其只有一个本地后端`127.0.0.1:80`，并通过`load_assignment`指定了cluster名称和负载信息。由于该监听器上的流量不会出战，因此下面并没有配置过滤器。
 
     ```json
      "cluster": {
@@ -757,7 +757,7 @@ Envoy对入站/出站请求的处理过程如下：
         }
        ]
       },
-      "filters": [ /* 过滤器设置，设置Node Metadata交互使用的协议为istio-peer-exchange */
+      "filters": [ /* 设置Node Metadata交互使用的协议为istio-peer-exchange */
        {
         "name": "istio.metadata_exchange",
         "typed_config": {
@@ -775,7 +775,7 @@ Envoy对入站/出站请求的处理过程如下：
         "match": { /* 匹配后端的条件，注入istio sidecar的pod会打上标签：security.istio.io/tlsMode=istio */
          "tlsMode": "istio"
         },
-        "transport_socket": { /* 匹配的后端使用的传输socket的配置 */
+        "transport_socket": { /* 匹配cluster的后端使用的传输socket的配置 */
          "name": "envoy.transport_sockets.tls",
          "typed_config": {
           "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
@@ -902,7 +902,7 @@ Envoy对入站/出站请求的处理过程如下：
                }
               },
               {
-               "name": "envoy.tcp_proxy",
+               "name": "envoy.tcp_proxy", /* 处理TCP的过滤器 */
                "typed_config": {
                 "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
                 "stat_prefix": "PassthroughCluster",
@@ -1350,16 +1350,13 @@ Envoy对入站/出站请求的处理过程如下：
                }
               },
               {
-               "name": "envoy.tcp_proxy",/* 配置TCP连接 */
+               "name": "envoy.tcp_proxy",/* TCP过滤器设置，设置连接到对应cluster的日志格式 */
                "typed_config": {
                 "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
                 "stat_prefix": "outbound|9092||prometheus-k8s.openshift-monitoring.svc.cluster.local",
                 "cluster": "outbound|9092||prometheus-k8s.openshift-monitoring.svc.cluster.local",
                 "access_log": [
-                 {
-                  "name": "envoy.file_access_log",
-                  ...
-                 }
+                 ...
                 ]
                }
               }
@@ -1379,7 +1376,7 @@ Envoy对入站/出站请求的处理过程如下：
                "typed_config": {
                 "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
                 "stat_prefix": "outbound_10.84.30.227_9092",
-                "rds": {
+                "rds": { /* RDS接口配置 */
                  "config_source": {
                   "ads": {},
                   "resource_api_version": "V3"
@@ -1500,7 +1497,52 @@ Envoy对入站/出站请求的处理过程如下：
         },
     ```
 
-    
+    从上面的配置可以看出，路由配置位于HttpConnectionManager类型中，因此如果某个listener没有用到HTTP，则不会有对应的route。如下面的istiod15012端口上的服务，提供了基于gRPC协议的XDP和CA的服务(使用TLS)。
+
+    ```json
+    {
+     "name": "10.84.251.157_15012",
+     "active_state": {
+      "version_info": "2020-09-16T07:48:42Z/22",
+      "listener": {
+       "@type": "type.googleapis.com/envoy.config.listener.v3.Listener",
+       "name": "10.84.251.157_15012",
+       "address": {
+        "socket_address": {
+         "address": "10.84.251.157",
+         "port_value": 15012
+        }
+       },
+       "filter_chains": [
+        {
+         "filters": [
+          {
+           "name": "istio.stats",
+           ...
+          },
+          {
+           "name": "envoy.tcp_proxy",
+           "typed_config": {
+            "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+            "stat_prefix": "outbound|15012||istiod.istio-system.svc.cluster.local",
+            "cluster": "outbound|15012||istiod.istio-system.svc.cluster.local",
+            "access_log": [
+             ...
+            ]
+           }
+          }
+         ]
+        }
+       ],
+       "deprecated_v1": {
+        "bind_to_port": false
+       },
+       "traffic_direction": "OUTBOUND"
+      },
+      "last_updated": "2020-09-16T07:49:34.134Z"
+     }
+    },
+    ```
 
   - Route：Istio的route也分为静态配置和动态配置。静态路由配置与静态监听器，以及inbound 动态监听器中设置的**静态路由配置**(`envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager`中的`route_config`)有关。
 
@@ -1565,7 +1607,11 @@ Envoy对入站/出站请求的处理过程如下：
         },
     ```
 
+更多内容可以参考Envoy的[官方文档](https://www.envoyproxy.io/docs/envoy/latest/intro/life_of_a_request)
 
+下面是基于Istio官方BookInfo的一个[访问流程图](https://www.servicemesher.com/istio-handbook/concepts/sidecar-traffic-route.html)，可以帮助理解整个流程。
+
+![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200918102434466-1282395165.png)
 
 ### 参考
 

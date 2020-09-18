@@ -4,17 +4,17 @@
 
 [TOC]
 
-下面描述一个经过Envoy代理的请求的生命周期。首先会描述Envoy如何使用请求路径来处理请求，然后描述请求从下游到达Envoy代理之后发生的内部事件。我们将跟踪该请求，直到请求被分发到上游并在响应路径中进行处理。
+下面描述一个经过Envoy代理的请求的生命周期。首先会描述Envoy如何在请求路径中处理请求，然后描述请求从下游到达Envoy代理之后发生的内部事件。我们将跟踪该请求，直到其被分发到上游和响应路径中。
 
 ### 术语
 
 Envoy会在代码和文档中使用如下术语：
 
-- Cluster：逻辑上的服务，包含一系列的endpoints，Envoy会将请求转发到这些Cluster上
+- Cluster：逻辑上的服务，包含一系列的endpoints，Envoy会将请求转发到这些Cluster上。
 - Downstream：连接到Envoy的实体。可能是一个本地应用(sidecar模型)或网络节点。非sidecar模型下体现为一个远端客户端。
 - Endpoints：实现了逻辑服务的网络节点。Endpoints组成了Clusters。一个Cluster中的Endpoints为某个Envoy代理的upstream。
 - Filter：连接或请求处理流水线的一个模块，提供了请求处理的某些功能。类似Unix的小型实用程序（过滤器）和Unix管道（过滤器链）的组合。
-- Filter chain：一些列的Filters。
+- Filter chain：一些列Filters。
 - Listeners：负责绑定一个IP/端口的Envoy模块，接收新的TCP连接(或UDP数据包)以及对下游的请求进行编排。
 - Upstream：Envoy转发请求到一个服务时连接的Endpoint。可能是一个本地应用或网络节点。非sidecar模型下体现为一个远端后端。
 
@@ -187,8 +187,8 @@ Envoy有一个[基于事件的线程模型](https://blog.envoyproxy.io/envoy-thr
 使用上面的示例配置简要概述请求和响应的生命周期：
 
 1. 由运行在一个`工作线程`的Envoy [监听器](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/listeners/listeners#arch-overview-listeners)接收下游TCP连接
-2. 创建并运行 [监听过滤器(https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/listeners/listener_filters#arch-overview-listener-filters)链。该链可以提供SNI以及其他TLS之前的信息。一旦完成，该监听器会匹配到一个网络过滤器链。每个监听器可能具有多个过滤链，这些filter链会匹配目标IP CIDR范围，SNI，ALPN，源端口等的某种组合。传输套接字（此例为TLS传输套接字）与此过滤器链相关联。
-3. 在网络读取时，TLS传输套接字会从TCP连接中解密数据，以便后续做进一步的处理
+2. 创建并运行 [监听过滤器](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/listeners/listener_filters#arch-overview-listener-filters)链。该链可以提供SNI以及其他TLS之前的信息。一旦完成，该监听器会匹配到一个网络过滤器链。每个监听器可能具有多个过滤链，这些filter链会匹配目标IP CIDR范围，SNI，ALPN，源端口等的某种组合。传输套接字（此例为TLS传输套接字）与此过滤器链相关联。
+3. 在网络读取时，TLS传输套接字会从TCP连接中解密数据，以便后续做进一步的处理。
 4. 创建并运行[网络过滤器](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/listeners/network_filters#arch-overview-network-filters)链。用于HTTP的最重要的filter为HTTP连接管理器，作为network filter链上的最后一个filter
 5. [HTTP连接管理器中](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/http/http_connection_management#arch-overview-http-conn-man)的HTTP/2编解码器将解密后的数据流从TLS连接上解帧并解复用为多个独立的流。每个流处理一个单独的请求和响应。
 6. 对于每个HTTP流，会创建并运行一个[HTTP 过滤器](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/http/http_filters#arch-overview-http-filters)链。请求首先会经过CustomFilter，可能会读取并修改该请求。最重要的HTTP过滤器是路由过滤器，位于HTTP 过滤器链的末尾。当路由过滤器调用`decodeHeaders`时，会选择路由和cluster。数据流中的请求首部会转发到上游cluster的endpoint中。`router` 过滤器会从群集管理器中为匹配的cluster获取HTTP[连接池](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/connection_pooling#arch-overview-conn-pool)。
@@ -206,7 +206,7 @@ Envoy有一个[基于事件的线程模型](https://blog.envoyproxy.io/envoy-thr
 
 ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200912151231417-1211519644.png)
 
-*ListenerManager*负责获取监听](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/listeners/listeners#arch-overview-listeners)的配置，并实例化绑定到各自IP/端口的多个`Listener`实例。监听器的状态可能为：
+*ListenerManager*负责获取[监听器](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/listeners/listeners#arch-overview-listeners)的配置，并实例化绑定到各自IP/端口的多个`Listener`实例。监听器的状态可能为：
 
 - *Warming*：监听器等待配置依赖(即，路配置，动态secret)。此时监听器无法接收TCP连接。
 - *Active*：监听器绑定到其IP/端口，可以接收TCP连接。
