@@ -16,7 +16,7 @@ Envoy会在代码和文档中使用如下术语：
 - Filter：连接或请求处理流水线的一个模块，提供了请求处理的某些功能。类似Unix的小型实用程序（过滤器）和Unix管道（过滤器链）的组合。
 - Filter chain：一些列Filters。
 - Listeners：负责绑定一个IP/端口的Envoy模块，接收新的TCP连接(或UDP数据包)以及对下游的请求进行编排。
-- Upstream：Envoy转发请求到一个服务时连接的Endpoint。可能是一个本地应用或网络节点。非sidecar模型下体现为一个远端后端。
+- Upstream：Envoy转发请求到一个服务时连接的Endpoint。可能是一个本地应用或网络节点。非sidecar模型下体现为一个远端endpoint。
 
 ### 网络拓扑
 
@@ -220,15 +220,15 @@ Envoy有一个[基于事件的线程模型](https://blog.envoyproxy.io/envoy-thr
 
 ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200913152453326-1937005929.png)
 
-TLS检查过滤器实现了 [ListenerFilter](https://github.com/envoyproxy/envoy/blob/5d95032baa803f853e9120048b56c8be3dab4b0d/include/envoy/network/filter.h)接口。所有的过滤器接口，无论是监听或网络/HTTP过滤器，都需要实现特定连接或流时间的回调方法，*ListenerFilter*中为：
+TLS检查过滤器实现了 [ListenerFilter](https://github.com/envoyproxy/envoy/blob/5d95032baa803f853e9120048b56c8be3dab4b0d/include/envoy/network/filter.h)接口。所有的过滤器接口，无论是监听或网络/HTTP过滤器，都需要实现特定连接或流事件的回调方法，*ListenerFilter*中为：
 
 ```c++
 virtual FilterStatus onAccept(ListenerFilterCallbacks& cb) PURE;
 ```
 
-`onAccept()`允许在TCP accept处理时运行一个过滤器。回调方法的`FilterStatus`控制监听过滤器链将如何继续。监听过滤器可能会暂停过滤器链，后续再恢复运行，如响应另一个服务进行的RPC请求。
+`onAccept()`允许在TCP accept处理时运行一个过滤器。回调方法的`FilterStatus`控制监听过滤器链将如何运行。监听过滤器可能会暂停过滤器链，后续再恢复运行，如响应另一个服务进行的RPC请求。
 
-在过滤器链进行匹配时，会抽取监听过滤器和连接的属性，提供用于处理连接的网络过滤器链和传输socket。
+在过滤器链进行匹配时，会抽取监听过滤器和连接的属性，提供给用于处理连接的网络过滤器链和传输socket。
 
 ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200913154118823-389554441.png)
 
@@ -243,11 +243,11 @@ virtual IoResult doWrite(Buffer::Instance& buffer, bool end_stream) PURE;
 virtual void closeSocket(Network::ConnectionEvent event) PURE;
 ```
 
-当一个TCP连接可以传输数据时，`Network::ConnectionImpl::onReadReady()`会通过`SslSocket::doRead()`调用TLS传输socket。传输socket然后会在TCP连接上进行TLS握手。TLS握手结束后，`SslSocket::doRead()`会给`Network::FilterManagerImpl`实例提供一个解密的字节流，该实力负责管理网络过滤器链。
+当一个TCP连接可以传输数据时，`Network::ConnectionImpl::onReadReady()`会通过`SslSocket::doRead()`调用TLS传输socket。传输socket然后会在TCP连接上进行TLS握手。TLS握手结束后，`SslSocket::doRead()`会给`Network::FilterManagerImpl`实例提供一个解密的字节流，该实例负责管理网络过滤器链。
 
 ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200913154822343-2090496267.png)
 
-需要注意的是，无论是TLS握手还是过滤器pipeline暂停，都不会真正阻塞任何操作。由于Envoy是基于事件的，因此任何需要额外数据才能进行处理的情况都将导致提前完成事件，并将CPU转移给另一个事件。如当网络提供了更多的可读数据时，该读事件将会触发TLS握手恢复。
+需要注意的是，无论是TLS握手还是过滤器处理流程的暂停，都不会真正阻塞任何操作。由于Envoy是基于事件的，因此任何需要额外数据才能进行处理的情况都将导致提前完成事件，并将CPU转移给另一个事件。如当网络提供了更多的可读数据时，该读事件将会触发TLS握手恢复。
 
 #### 4.网络过滤器链的处理
 
@@ -255,7 +255,7 @@ virtual void closeSocket(Network::ConnectionEvent event) PURE;
 
 ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200913155624620-2072767193.png)
 
-网络过滤器包含一个pipeline，与每个连接一个的传输socket不通，网络过滤器分为三种：
+网络过滤器包含一个pipeline，与一个连接一个的传输socket不同，网络过滤器分为三种：
 
 - [ReadFilter](https://github.com/envoyproxy/envoy/blob/5d95032baa803f853e9120048b56c8be3dab4b0d/include/envoy/network/filter.h)：实现了`onData()`,当连接中的数据可用时(由于某些请求)被调用
 - [WriteFilter](https://github.com/envoyproxy/envoy/blob/5d95032baa803f853e9120048b56c8be3dab4b0d/include/envoy/network/filter.h)：实现了`onWrite()`, 当给连接写入数据时(由于某些响应)被调用
@@ -271,7 +271,7 @@ virtual FilterStatus onWrite(Buffer::Instance& data, bool end_stream) PURE;
 
 与监听过滤器类似，`FilterStatus`允许过滤器暂停过滤器链的执行。例如，如果需要查询限速服务，限速网络过滤器将会从`onData()`中返回`Network::FilterStatus::StopIteration`，并在请求结束后调用`continueReading()`。
 
-用于处理HTTP的侦听器的最后一个网络过滤器是[HTTP连接管理器](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/http/http_connection_management#arch-overview-http-conn-man)（HCM）。该过滤器负责创建HTTP/2编解码器并管理HTTP过滤器链。在上面的例子中，它是唯一的网络过滤器。使用多个网络过滤器的网络过滤器链类似：
+HTTP的监听器的最后一个网络过滤器是[HTTP连接管理器](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/http/http_connection_management#arch-overview-http-conn-man)（HCM）。该过滤器负责创建HTTP/2编解码器并管理HTTP过滤器链。在上面的例子中，它是唯一的网络过滤器。使用多个网络过滤器的网络过滤器链类似：
 
 ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200913160912634-50421199.png)
 
@@ -289,7 +289,7 @@ Envoy的HTTP/2编解码器基于[nghttp2](https://nghttp2.org/)，当TCP连接�
 
 #### 6.HTTP过滤器链的处理
 
-对于每个HTTP流，HCM会实例化一个HTTP过滤器链，遵循上面为监听器和网络过滤器链建立的模式。
+对于每个HTTP流，HCM会实例化一个[HTTP过滤器](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/http/http_filters#arch-overview-http-filters)链，遵循上面为监听器和网络过滤器链建立的模式。
 
 ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200913162549808-708437824.png)
 
@@ -307,41 +307,83 @@ virtual FilterDataStatus decodeData(Buffer::Instance& data, bool end_stream) PUR
 virtual FilterTrailersStatus decodeTrailers(RequestTrailerMap& trailers) PURE;
 ```
 
+HTTP过滤器遵循HTTP请求的生命周期，而不针对连接缓冲区和事件进行操作，如`decodeHeaders()`使用HTTP首部作为参数，而不是字节buffer。与网络和监听过滤器一样，返回的`FilterStatus`提供了管理过滤器链控制流的功能。
+
+当可以使用HTTP/2编解码器处理HTTP请求首部时，会首先传递给在CustomFilter中的`decodeHeaders()`。如果返回的`FilterHeadersStatus`为`Continue`，则HCM会将首部(可能会被CustomFilter修改)传递给路由过滤器。
+
+解码器和编解码过滤器运行在请求路径上，编码器和编码解码过滤器运行在响应路径上。考虑如下过滤器链：
 
 
 
+![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200918162822691-1449911917.png)
 
+请求路径为：
 
+![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200918162958264-342204392.png)
 
+响应路径为:
 
+![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200918163048422-742634825.png)
 
+当在[路由](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/http/http_routing#arch-overview-http-routing)过滤器中调用`decodeHeaders()`时，会确定路由选择并挑选cluster。HCM会在HTTP过滤器链执行开始时从`RouteConfiguration`中选择一个路由，该路由被称为缓存路由。过滤器可能会通过要求HCM清除路由缓存并请求HCM重新评估路由选择来修改首部，并导致选择一个新的路由。当调用路由过滤器时，也就确定了路由。显选择的路由会指向一个上游cluster名称。然后路由过滤器会向*ClusterManager* 为该cluster请求一个HTTP[连接池](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/connection_pooling#arch-overview-conn-pool)。该过程涉及负载平衡和连接池，将在下一节中讨论。
 
+![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200918164329050-451744694.png)
 
+HTTP连接池是用来在router中构建一个*UpstreamRequest*对象，该对象封装了用于处理上游HTTP请求的HTTP编码和解码的回调方法。一旦在HTTP连接池的连接上分配了一个流，则会通过`UpstreamRequest::encoderHeaders()`将请求首部转发到上游endpoint。
 
+路由过滤器负责(从HTTP连接池上分配的流上的)到上游的请求的生命周期管理，同时也负责请求超时，重试和亲和性等。
 
+#### 7.负载均衡
 
+每个cluster都有一个[负载均衡](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/overview#arch-overview-load-balancing)，当接收到一个请求时会选择一个endpoint。Envoy支持多种类型的负载均衡算法，如基于权重的轮询，Maglev，负载最小，随机等算法。负载均衡会从静态的bootstrap配置，DNS，动态xDS以及主动/被动健康检查中获得其需要处理的内容。更多详情参见[官方文档](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/load_balancing/overview#arch-overview-load-balancing)。
 
+一旦选择了endpoint，会使用[连接池](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/connection_pooling#arch-overview-conn-pool)来为该endpoint选择一个连接来转发请求。如果没有到该主机的连接，或所有的连接已经达到了并发流的上线，则会建立一条新的流，并将它放到连接池里(除非触发了群集的最大连接的[断路器](https://github.com/envoyproxy/envoy/blob/3d481305fad358c4e47ee47869590b18d592e893/arch_overview_circuit_breakers))。如果配置了流的最大生命时间，且已经达到了该时间点，那么此时会在连接池中分配一个新的连接，并终止旧的HTTP/2连接。此外还会检查其他断路器，如到一个cluster的最大并发请求等。
 
+![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200919193428731-886559580.png)
 
+#### 8.HTTP/2 编解码器的编码
 
+连接的HTTP/2的编解码器会对单条TCP连接上的到达相同上游的其他请求流进行多路复用，与[HTTP/2编解码器的解码](HTTP/2编解码器的解码)是相反的
 
+与下游HTTP/2编解码器一样，上游的编解码器负责采用Envoy的HTTP标准抽象，即多个流在单个连接上与请求/响应标头/正文/尾部进行复用，并通过生成一系列HTTP/2帧将其映射到HTTP/2的细节中。
 
+#### 9.TLS传输socket的加密
 
+上游endpoint连接的TLS传输socket会加密来自HTTP/2编解码器的输出，并将其写入到上游连接的TCP socket中。 与[TLS传输套接字的解码](https://www.envoyproxy.io/docs/envoy/latest/intro/life_of_a_request#life-of-a-request-tls-decryption)一样，在我们的示例中，群集配置了传输套接字，用来提供TLS传输的安全性。上游和下游传输socket扩展都存在相同的接口。
 
+![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200919195135252-755646571.png)
 
+#### 10.响应路径和HTTP生命周期
 
+请求包含首部，可选择的主体和尾部，通过代理到上游，并将响应代理到下游。响应会通过以与请求[相反的顺序](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/http/http_filters#arch-overview-http-filters-ordering)经过HTTP和network过滤器。
 
+HTTP过滤器会调用解码器/编码器请求生命周期事件的各种回调，例如 当转发响应尾部或请求主体被流式传输时。类似地，读/写network过滤器还将在数据在请求期间继续在两个方向上流动时调用它们各自的回调。
 
+endpoint的[异常检测](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/upstream/outlier#arch-overview-outlier-detection)状态会随着请求的进行而修改。
 
+当上游响应到达流的末端后即完成了一个请求。即接收到尾部或带有最终流集的响应头/主体时。这个流程在`Router::Filter::onUpstreamComplete()`在进行处理。
 
+一个请求有可能提前结束，可能的原因为：
 
+- 请求超时
+- 上游endpoint的流被重置
+- HTTP过滤器流被重置
+- 出发断路器
+- 不可用的上游资源，如缺少路由指定的cluster
+- 不健康的endpoints
+- Dos攻击
+- 无效的HTTP协议
+- 通过HCM或HTTP过滤器进行了本地回复。如HTTP过滤器可能会因为频率限制而返回429响应。
 
+如果上游响应还没有发送，则Envoy会原因生成一个内部的响应；如果响应首部已经转发到了下游，则会重置流。更多参见Envoy的[调试FAQ](https://www.envoyproxy.io/docs/envoy/latest/faq/overview#faq-overview-debug)。
 
+#### 11.请求后的处理
 
+一旦请求完成，则流会被销毁。发生的事件如下：
 
-
-
-
+- 更新请求后的[统计](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/observability/statistics#arch-overview-statistics)(如时间，活动的请求，更新，检查检查等)。但有些统计会在请求过程中进行更新。此时尚未将统计信息写入统计[接收器](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/bootstrap/v3/bootstrap.proto#envoy-v3-api-field-config-bootstrap-v3-bootstrap-stats-sinks)，它们由主线程定期进行批处理和写入。在上述示例中，这是一个statsd接收器。
+- 将[访问日志](https://www.envoyproxy.io/docs/envoy/latest/intro/arch_overview/observability/access_logging#arch-overview-access-logs)写入访问日志接收器，在上述示例中，为一个文件访问日志。
+- 确定trace spans。如果上述例子进行了请求追踪，则会生成一个trace span，描述了请求的持续时间和细节，在处理请求首部是HCM会创建trace span，并在请求后处理过程中由HCM进行最终确定。
 
 
 
