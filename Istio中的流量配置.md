@@ -59,6 +59,10 @@ Envoy对入站/出站请求的处理过程如下，Envoy按照如下顺序依次
 
 ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200916144803520-1592409597.png)
 
+典型的入站请求流程[如下](https://www.envoyproxy.io/docs/envoy/latest/intro/life_of_a_request#network-filter-chain-processing)，首先在监听过滤器链中解析入站报文中的TLS，然后通过传输socket建立连接，最后由网络过滤器链进行处理(含HTTP连接管理器)。
+
+![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200913155624620-2072767193.png)
+
 ### Pilot-agent生成的初始配置文件
 
 `pilot-agent`根据启动参数和K8S API Server中的配置信息生成Envoy的[bootstrap](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/bootstrap/v3/bootstrap.proto#bootstrap)文件(`/etc/istio/proxy/envoy-rev0.json`)，并负责启动Envoy进程(可以看到`Envoy`进程的父进程是`pilot-agent`)；`envoy`会通过xDS接口从istiod动态获取配置文件。`envoy-rev0.json`初始配置文件结构如下：
@@ -728,10 +732,18 @@ Envoy对入站/出站请求的处理过程如下，Envoy按照如下顺序依次
 
   - outbound cluster：这类cluster为Envoy节点外的服务，配置如何连接上游。下面的EDS表示该cluster的endpoint来自EDS服务发现。下面给出的outbound cluster是istiod的15012端口上的服务。基本结构如下，`transport_socket_matches`仅在使用TLS才会出现，用于配置与TLS证书相关的信息。
 
+    > 可以使用`istioctl pc endpoint`查看EDS的内容
+  >
+    > ```shell
+  > # istioctl pc endpoint sleep-856d589c9b-rn7dw.default --cluster "outbound|15012||istiod.istio-system.svc.cluster.local"
+    > ENDPOINT              STATUS      OUTLIER CHECK     CLUSTER
+    > 10.80.3.141:15012     HEALTHY     OK                outbound|15012||istiod.istio-system.svc.cluster.local
+    > ```
+    
     ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200917162028031-1835006792.png)
-
+    
     具体内容如下：
-
+    
     ```json
     {
      "version_info": "2020-09-15T08:05:54Z/4",
