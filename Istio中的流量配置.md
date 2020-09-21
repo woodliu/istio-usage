@@ -739,11 +739,11 @@ Envoy对入站/出站请求的处理过程如下，Envoy按照如下顺序依次
     > ENDPOINT              STATUS      OUTLIER CHECK     CLUSTER
     > 10.80.3.141:15012     HEALTHY     OK                outbound|15012||istiod.istio-system.svc.cluster.local
     > ```
-    
+  
     ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200917162028031-1835006792.png)
-    
+  
     具体内容如下：
-    
+  
     ```json
     {
      "version_info": "2020-09-15T08:05:54Z/4",
@@ -820,7 +820,7 @@ Envoy对入站/出站请求的处理过程如下，Envoy按照如下顺序依次
             "default_validation_context": { /* 配置如何认证对端istiod服务的证书 */
              "match_subject_alt_names": [ /* Envoy会按照如下配置来校验证书中的SAN */
               {
-               "exact": "spiffe://new-td/ns/istio-system/sa/istiod-service-account" /* 与Istio配置的serviceaccount授权策略相同 */
+               "exact": "spiffe://new-td/ns/istio-system/sa/istiod-service-account" /* Istio数据面使用serviceaccount进行授权 */
               }
              ]
             },
