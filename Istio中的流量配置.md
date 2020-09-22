@@ -825,14 +825,14 @@ Envoy对入站/出站请求的处理过程如下，Envoy按照如下顺序依次
              ]
             },
             "validation_context_sds_secret_config": { /* SDS配置，也是通过静态的cluster sds-grpc提供SDS API服务 */
-             "name": "ROOTCA",
+             "name": "ROOTCA", /* 用于认证对端的CA证书， */
              "sds_config": {
               "api_config_source": {
                "api_type": "GRPC",
                "grpc_services": [
                 {
                  "envoy_grpc": {
-                  "cluster_name": "sds-grpc"
+                  "cluster_name": "sds-grpc" /* 获取该CA证书的SDS服务器 */
                  }
                 }
                ],
@@ -1650,6 +1650,212 @@ Envoy对入站/出站请求的处理过程如下，Envoy按照如下顺序依次
 
 ![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200918102434466-1282395165.png)
 
+
+
+### SDS
+
+下图来自[这篇文章](https://cloud.tencent.com/developer/article/1680602)
+
+![](https://img2020.cnblogs.com/blog/1334952/202009/1334952-20200922132124590-1783723640.png)
+
+SDS会动态下发两个证书：`default`和`ROOTCA`。前者表示本服务使用的证书，证书中的SAN使用了该服务对应的命名空间下的serviceaccount；后者为集群的CA，通过将configmap `istio-ca-root-cert`挂载到服务的pod中，它与`istio-system`命名空间中的secret `istio-ca-secret`相同，可以用于认证各个服务的证书(`default`)。因此不同的服务使用的`default`证书是不同的，但使用的`ROOTCA`证书是相同的。
+
+```json
+  {
+   "@type": "type.googleapis.com/envoy.admin.v3.SecretsConfigDump",
+   "dynamic_active_secrets": [
+    {
+     "name": "default",
+     "version_info": "09-21 20:10:52.178",
+     "last_updated": "2020-09-21T20:10:52.446Z",
+     "secret": {
+      "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret",
+      "name": "default", /* 服务使用的证书 */
+      "tls_certificate": {
+       "certificate_chain": {
+        "inline_bytes": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JS..."
+       },
+       "private_key": {
+        "inline_bytes": "W3JlZGFjdGVkXQ=="
+       }
+      }
+     }
+    },
+    {
+     "name": "ROOTCA",
+     "version_info": "2020-09-15 08:05:53.174860205 +0000 UTC m=+1.073140142",
+     "last_updated": "2020-09-15T08:05:53.275Z",
+     "secret": {
+      "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret",
+      "name": "ROOTCA", /* 验证服务证书使用的CA证书 */
+      "validation_context": {
+       "trusted_ca": {
+        "inline_bytes": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t..."
+       }
+      }
+     }
+    }
+   ]
+  }
+```
+
+将default证书导出，查看该证书，可以看到其使用的SAN为`spiffe://new-td/ns/default/sa/sleep`，用到了`default`命名空间下的serviceaccount `sleep`，提供了该服务的身份标识。
+
+```shell
+# openssl x509 -in ca-chain.crt -noout -text
+Certificate:
+    Data:
+        Version: 3 (0x2)
+        Serial Number:
+            37:31:36:d4:25:64:18:10:27:47:75:79:6c:ff:21:3a
+    Signature Algorithm: sha256WithRSAEncryption
+        Issuer: O=cluster.local
+        Validity
+            Not Before: Sep 21 08:34:33 2020 GMT
+            Not After : Sep 22 08:34:33 2020 GMT
+        Subject:
+        Subject Public Key Info:
+            ...
+
+            X509v3 Subject Alternative Name: critical
+                URI:spiffe://new-td/ns/default/sa/sleep
+    Signature Algorithm: sha256WithRSAEncryption
+         ...
+```
+
+到处`default`和`ROOTCA`证书，分别对应下面的pod.crt和root-cat.crt，可以看到，能够使用`ROOTCA`来验证`default`。
+
+```shell
+# openssl verify -CAfile root-ca.crt pod.crt
+ca-chain.crt: OK
+```
+
+在 Istio的sidecar配置中，有两处需要通过 SDS 来配置证书：
+
+- Inbound Listener：Inbound Listener用于接收来自下游的连接，在`DownstreamTlsContext`中配置了对下游连接的认证。其指定了用于验证下游连接的ROOTCA证书。`match_subject_alt_names`中指定的通配SAN是因为在安装Istio时通过参数`values.global.trustDomain`指定了信任域。
+
+  ```json
+             "common_tls_context": {
+              "alpn_protocols": [
+               "istio-peer-exchange",
+               "h2",
+               "http/1.1"
+              ],
+              "tls_certificate_sds_secret_configs": [
+               {
+                "name": "default", /* 服务器使用的证书名称，由SDS下发 */
+                "sds_config": {
+                 "api_config_source": {
+                  "api_type": "GRPC",
+                  "grpc_services": [
+                   {
+                    "envoy_grpc": {
+                     "cluster_name": "sds-grpc"
+                    }
+                   }
+                  ],
+                  "transport_api_version": "V3"
+                 },
+                 "initial_fetch_timeout": "0s",
+                 "resource_api_version": "V3"
+                }
+               }
+              ],
+              "combined_validation_context": {
+               "default_validation_context": {
+                "match_subject_alt_names": [ /* 指定的信任域 */
+                 {
+                  "prefix": "spiffe://new-td/"
+                 },
+                 {
+                  "prefix": "spiffe://old-td/"
+                 }
+                ]
+               },
+               "validation_context_sds_secret_config": {
+                "name": "ROOTCA", /* 用于认证下游连接的CA证书 */
+                "sds_config": {
+                 "api_config_source": {
+                  "api_type": "GRPC",
+                  "grpc_services": [
+                   {
+                    "envoy_grpc": {
+                     "cluster_name": "sds-grpc"
+                    }
+                   }
+                  ],
+                  "transport_api_version": "V3"
+                 },
+                 "initial_fetch_timeout": "0s",
+                 "resource_api_version": "V3"
+                }
+               }
+              }
+             },
+  ```
+
+- Outbound Cluster：outbound cluster(下例为`outbound|80||sleep.default.svc.cluster.local`)作为下游配置，也需要对服务端的证书进行验证。其`UpstreamTlsContext`中的配置如下。由于上有服务为`sleep.default.svc.cluster.local`，因此在`match_subject_alt_names`字段中指定了验证的服务端的SAN。
+
+  ```json
+            "common_tls_context": {
+             "alpn_protocols": [
+              "istio-peer-exchange",
+              "istio"
+             ],
+             "tls_certificate_sds_secret_configs": [
+              {
+               "name": "default",
+               "sds_config": {
+                "api_config_source": {
+                 "api_type": "GRPC",
+                 "grpc_services": [
+                  {
+                   "envoy_grpc": {
+                    "cluster_name": "sds-grpc"
+                   }
+                  }
+                 ],
+                 "transport_api_version": "V3"
+                },
+                "initial_fetch_timeout": "0s",
+                "resource_api_version": "V3"
+               }
+              }
+             ],
+             "combined_validation_context": {
+              "default_validation_context": {
+               "match_subject_alt_names": [ /* 上游服务使用的证书中的SAN */
+                {
+                 "exact": "spiffe://new-td/ns/default/sa/sleep"
+                }
+               ]
+              },
+              "validation_context_sds_secret_config": {
+               "name": "ROOTCA",
+               "sds_config": {
+                "api_config_source": {
+                 "api_type": "GRPC",
+                 "grpc_services": [
+                  {
+                   "envoy_grpc": {
+                    "cluster_name": "sds-grpc"
+                   }
+                  }
+                 ],
+                 "transport_api_version": "V3"
+                },
+                "initial_fetch_timeout": "0s",
+                "resource_api_version": "V3"
+               }
+              }
+             }
+            },
+  ```
+
+可以看到，作为服务端，仅需要使用ROOTCA证书对客户端进行证书校验即可(如果没有指定信任域)；作为客户端，需要使用ROOTCA证书对服务端证书进行校验，也需要对服务端使用的证书中的SAN进行校验。
+
+gateway上，如果需要针对服务网格外部的服务进行TLS双向认证，可以参考[Traffic Management](https://preliminary.istio.io/latest/docs/tasks/traffic-management/)。
+
 ### 参考
 
 - [Sidecar 流量路由机制分析](https://www.servicemesher.com/istio-handbook/concepts/sidecar-traffic-route.html)
@@ -1657,4 +1863,5 @@ Envoy对入站/出站请求的处理过程如下，Envoy按照如下顺序依次
 - [Istio1.5 & Envoy 数据面 WASM 实践](https://www.servicemesher.com/blog/202004-istio-envoy-wasm/)
 - [How to write WASM filters for Envoy and deploy it with Istio](https://banzaicloud.com/blog/envoy-wasm-filter/)
 - [Implementing Filters in Envoy](https://medium.com/@alishananda/implementing-filters-in-envoy-dcd8fc2d8fda)
+- [一文带你彻底厘清 Isito 中的证书工作机制](https://cloud.tencent.com/developer/article/1680602)
 
