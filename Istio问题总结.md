@@ -67,7 +67,7 @@ admin commands are:
 
    对`UH`的解释为`UH: No healthy upstream hosts in upstream cluster in addition to 503 response code`。从上面错误信息可以看到并没有`UPSTREAM_CLUSTER`字段的内容，如果是访问集群内部的服务，可以查看是否存在该服务；如果是访问集群外面的服务，可以查看是否在Istio安装时指定了`--set meshConfig.outboundTrafficPolicy.mode=REGISTRY_ONLY`参数，如果指定了该参数，需要通过`ServiceEntry`来将外部服务注册到Istio的注册中心。
 
-   下面是对baidu.com的服务，一个通过ServiceEntry进行注册，可以看到`UPSTREAM_CLUSTER`字段的值为`outbound|443||*.baidu.com`，可以通过`istioctl pc cluster`命令查看到该cluster；另外一个采用passthrough方式访问，可以看到`UPSTREAM_CLUSTER`字段的值为`PassthroughCluster`。
+   下面是对baidu.com的服务，一个通过`ServiceEntry`进行注册，可以看到`UPSTREAM_CLUSTER`字段的值为`outbound|443||*.baidu.com`，可以通过`istioctl pc cluster`命令查看到该cluster；另外一个采用passthrough方式访问，可以看到`UPSTREAM_CLUSTER`字段的值为`PassthroughCluster`。
 
    ```shell
    "- - -" 0 - "-" "-" 780 165931 275 - "-" "-" "-" "-" "180.101.49.69:443" outbound|443||*.baidu.com 10.83.0.198:33954 180.101.49.69:443 10.83.0.198:33952 map.baidu.com -

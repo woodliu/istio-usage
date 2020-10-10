@@ -210,7 +210,7 @@ Envoy对入站/出站请求的处理过程如下，Envoy按照如下顺序依次
                 "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext",
                 "sni": "istiod.istio-system.svc", /* 创建TLS后端(即SDS服务器)连接时要使用的SNI字符串 */
                 "common_tls_context": { /* 配置client和server使用的TLS上下文 */
-                  "alpn_protocols": [/* listener暴露的ALPN协议列表，如果为空，则不使用APPN */
+                  "alpn_protocols": [/* listener暴露的ALPN协议列表，如果为空，则不使用ALPN */
                     "h2"
                   ],
                   "tls_certificate_sds_secret_configs": [/*通过SDS API获取TLS证书的配置 */
@@ -476,7 +476,7 @@ Envoy对入站/出站请求的处理过程如下，Envoy按照如下顺序依次
          },
     ```
 
-    > `BlackHoleCluster`使用的API类型为[type.googleapis.com/udpa.type.v1.TypedStruct](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/core/v3/extension.proto.html?highlight=typedstruct#config-core-v3-typedextensionconfig)，表示控制面缺少缺少该扩展的模式定义，client会使用[type_url](https://www.envoyproxy.io/docs/envoy/latest/configuration/overview/extension#extension-configuration)指定的API，将内容转换为类型化的配置资源。
+    > `BlackHoleCluster`使用的API类型为[type.googleapis.com/udpa.type.v1.TypedStruct](https://www.envoyproxy.io/docs/envoy/latest/api-v3/config/core/v3/extension.proto.html?highlight=typedstruct#config-core-v3-typedextensionconfig)，表示控制面缺少该扩展的模式定义，client会使用[type_url](https://www.envoyproxy.io/docs/envoy/latest/configuration/overview/extension#extension-configuration)指定的API，将内容转换为类型化的配置资源。
     >
     > 在上面可以看到Istio使用了协议`istio-peer-exchange `，服务网格内部的两个Envoy实例之间使用该协议来交互Node Metadata。[NodeMetadata](https://github.com/istio/istio/blob/master/pilot/pkg/model/context.go#L418)的数据结构如下：
     >
@@ -682,7 +682,7 @@ Envoy对入站/出站请求的处理过程如下，Envoy按照如下顺序依次
 
     可以使用[Prometheus metrics](https://istio.io/latest/blog/2019/monitoring-external-service-traffic/#passthroughcluster-metrics)来监控到`BlackHoleCluster`和`PassthroughCluster`的访问。
 
-  - inbound cluster：处理入站请求的cluster，对于下面的sleep应用来说，其只有一个本地后端`127.0.0.1:80`，并通过`load_assignment`指定了cluster名称和负载信息。由于该监听器上的流量不会出战，因此下面并没有配置过滤器。
+  - inbound cluster：处理入站请求的cluster，对于下面的sleep应用来说，其只有一个本地后端`127.0.0.1:80`，并通过`load_assignment`指定了cluster名称和负载信息。由于该监听器上的流量不会出站，因此下面并没有配置过滤器。
 
     ```json
      "cluster": {
@@ -820,7 +820,7 @@ Envoy对入站/出站请求的处理过程如下，Envoy按照如下顺序依次
             "default_validation_context": { /* 配置如何认证对端istiod服务的证书 */
              "match_subject_alt_names": [ /* Envoy会按照如下配置来校验证书中的SAN */
               {
-               "exact": "spiffe://new-td/ns/istio-system/sa/istiod-service-account" /* Istio数据面使用serviceaccount进行授权 */
+               "exact": "spiffe://new-td/ns/istio-system/sa/istiod-service-account" /* Istio数据面使用serviceaccount进行授权，此处用于校验对端istiod证书中的SAN，参见下面的SDS介绍 */
               }
              ]
             },
