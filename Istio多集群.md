@@ -76,7 +76,7 @@
 
 > 注意不能直接采用[官方](https://istio.io/latest/docs/setup/install/multicluster/gateways/#setup-dns)配置文件，可能会导致k8s的coredns无法正常启动。正确做法是在kube-system命名空间下获取k8s coredns的configmap配置，然后在后面追加global域有关的配置即可。
 >
-> 另外使用如下命令apply之后，k8s的coredns可能并不会生效，可以手动重启k8s的dns来使其生效。
+> 另外使用如下命令apply之后，k8s的coredns可能并不会生效，可以手动重启k8s的dns来使其生效。注意如下配置需要在cluster1和cluster2中**同时**生效
 
 ```yaml
 kubectl apply -f - <<EOF
