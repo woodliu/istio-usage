@@ -1,4 +1,4 @@
-## Istio多集群
+## Istio多集群(1)-多控制面
 
 参考自[官方文档](https://istio.io/latest/docs/setup/install/multicluster/gateways/)。
 
@@ -19,11 +19,11 @@
 - 两个或多个kubernees集群，版本为1.17，1.18，1.19
 - 在每个kubernetes集群上[部署Istio控制面](https://preliminary.istio.io/latest/docs/setup/install/istioctl/)
 - 每个集群中的`istio-ingressgateway`的服务IP地址必须能够被所有的集群访问，理想情况下，使用L4网络负载平衡器（NLB）。
-- 根CA。跨集群通信需要在服务之间使用mutual TLS。为了在跨集群通信时启用mutual TLS，每个集群的Istio CA必须配置使用共享的CA证书生成的中间CA。出于演示目的，将会使用Istio的`samples/certs`安装目录下的根CA证书
+- 根CA。跨集群通信需要在服务之间使用mutual TLS。为了在跨集群通信时启用mutual TLS，每个集群的Istio CA必须配置使用共享的CA证书生成的中间CA。出于演示目的，将会使用Istio的`samples/certs`安装目录下的根CA证书。
 
 #### 在每个集群中部署Istio控制面
 
-1. 使用自己的根CA为每个集群生成中间CA证书，使用共享的根CA来为跨集群的通信启用mutual TLS。
+1. 使用自定义的根CA为每个集群生成中间CA证书，使用共享的根CA来为跨集群的通信启用mutual TLS。
 
    出于演示目的，下面使用了istio样例目录中的证书。在真实部署时，应该为每个集群选择不同的CA证书，这些证书由一个共同的根CA签发。
 
@@ -42,7 +42,7 @@
          --from-file=samples/certs/cert-chain.pem
      ```
 
-   - 部署Istio，下面命令会在`istio-system`命名空间中创建一个pod `istiocoredns`，用于提供外部服务的DNS解析，其配置文件如下：
+   - 部署Istio，部署后会在`istio-system`命名空间中创建一个pod `istiocoredns`，用于提供到`global`域的DNS解析，其配置文件如下：
 
      ```shell
      # cat Corefile
@@ -74,9 +74,9 @@
 
 在每个需要调用远程的服务的集群中创建或更新一个现有的k8s的ConfigMap，本环境中使用的coredns为1.7.0版本，使用的配置文件如下：
 
-> 注意不能直接采用[官方](https://istio.io/latest/docs/setup/install/multicluster/gateways/#setup-dns)配置文件，可能会导致k8s的coredns无法正常启动。正确做法是在kube-system命名空间下获取k8s coredns的configmap配置，然后在后面追加global域有关的配置即可。
+> 注意不能直接采用[官方](https://istio.io/latest/docs/setup/install/multicluster/gateways/#setup-dns)配置文件，可能会因为不同版本的配置原因导致k8s的coredns无法正常启动。正确做法是在kube-system命名空间下获取k8s coredns的configmap配置，然后在后面追加global域有关的配置即可。
 >
-> 另外使用如下命令apply之后，k8s的coredns可能并不会生效，可以手动重启k8s的dns来使其生效。注意如下配置需要在cluster1和cluster2中**同时**生效
+> 另外使用如下命令apply之后，k8s的coredns可能并不会生效，可以手动重启k8s的dns pod来使其生效。注意如下配置需要在cluster1和cluster2中**同时**生效。
 
 ```yaml
 kubectl apply -f - <<EOF
@@ -115,7 +115,7 @@ data:
 EOF
 ```
 
-> 可以使用如下方式判断cluster1的DNS解析是否正确：
+> 在创建第4步的serviceEntry之后可以使用如下方式判断cluster1的DNS解析是否正确：
 >
 > - 首先在cluster1中的sleep容器中通过istio的coredns解析`httpbin.bar.global`，10.96.199.197为istio的coredns的service
 >
@@ -209,21 +209,19 @@ EOF
 
    ```shell
    export INGRESS_PORT=$(kubectl -n istio-system --context=$CTX_CLUSTER2 get service istio-ingressgateway -o jsonpath='{.spec.ports[?(@.name=="http2")].nodePort}')
-   export SECURE_INGRESS_PORT=$(kubectl -n istio-system --context=$CTX_CLUSTER2 get service istio-ingressgateway -o jsonpath='{.spec.ports[?(@.name=="https")].nodePort}')
-   export TLS_INGRESS_PORT=$(kubectl -n istio-system --context=$CTX_CLUSTER2 get service istio-ingressgateway -o jsonpath='{.spec.ports[?(@.name=="tls")].nodePort}')
    ```
-
+   
    INGRESS_HOST的获取方式[如下](https://istio.io/latest/docs/tasks/traffic-management/ingress/ingress-control/#determining-the-ingress-ip-and-ports)：
 
    ```shell
-   export INGRESS_HOST=$(kubectl --context=$CTX_CLUSTER2 get po -l istio=ingressgateway -n istio-system -o jsonpath='{.items[0].status.hostIP}')
+export INGRESS_HOST=$(kubectl --context=$CTX_CLUSTER2 get po -l istio=ingressgateway -n istio-system -o jsonpath='{.items[0].status.hostIP}')
    ```
-
+   
 4. 为了允许`cluster1`中的`sleep`访问`cluster2`中的`httpbin`，需要在`cluster1`中为`httpbin`创建一个service entry。service entry的host名称的格式应该为`<name>.<namespace>.global`，name和namespace分别对应远端服务的name和namespace。
 
-   为了让DNS解析`.global`域下的服务，需要给这些服务分配IP地址。
+   为了让DNS解析`.global`域下的服务，需要给这些服务分配虚拟IP地址。
 
-   > 每个.global DNS域下的服务都必须在集群中拥有唯一的IP。
+   > 每个.global DNS域下的服务都必须在集群中拥有唯一的虚拟IP。
 
    如果global服务已经有了实际的VIPs，那么可以直接使用这类地址，否则建议使用范围为240.0.0.0/4的E类IP地址。应用使用这些IP处理流量时，流量会被sidecar捕获，并路由到合适的远端服务。
 
@@ -236,30 +234,30 @@ EOF
    metadata:
      name: httpbin-bar
    spec:
-     hosts:
+     hosts: #外部服务的主机名
      # must be of form name.namespace.global
      - httpbin.bar.global
      # Treat remote cluster services as part of the service mesh
      # as all clusters in the service mesh share the same root of trust.
-     location: MESH_INTERNAL #标注为网格内的服务
+     location: MESH_INTERNAL #标注为网格内的服务，使用mTLS交互
      ports: # 对端bar服务的端口
      - name: http1
        number: 8000
        protocol: http
-     resolution: DNS
+     resolution: DNS #使用DNS服务器进行域名解析，endpoints的address字段可能是一个域名
      addresses: # 下面指定了httpbin.bar.global:8000服务对应的一个后端${INGRESS_HOST}:30615
      # the IP address to which httpbin.bar.global will resolve to
      # must be unique for each remote service, within a given cluster.
      # This address need not be routable. Traffic for this IP will be captured
      # by the sidecar and routed appropriately.
      - 240.0.0.2 # host对应的虚拟地址，必须包含，否则istio-coredns-plugin无法进行DNS解析
-     endpoints: #指定非本
+     endpoints:
      # This is the routable address of the ingress gateway in cluster2 that
      # sits in front of sleep.foo service. Traffic from the sidecar will be
      # routed to this address.
      - address: ${INGRESS_HOST} # 将其替换为对应的node地址值即可
     ports:
-         http1: 30615 # 替换为对应的nodeport
+         http1: 30001 # 替换为对应的nodeport
    EOF
    ```
 
@@ -267,7 +265,7 @@ EOF
    >
    > ```shell
    > # kubectl --context=$CTX_CLUSTER2 get svc -n istio-system istio-ingressgateway -o=jsonpath='{.spec.ports[?(@.port==15443)].nodePort}'
-   > 30615
+   > 30001
    > ```
 
    上述配置会将`cluster1`中`httpbin.bar.global`服务的所有端口上的流量(通过mutual TLS)路由到`$INGRESS_HOST:15443`。
@@ -277,94 +275,105 @@ EOF
    >下面是从cluster1的sleep中导出的istio-proxy配置，可以看到`httpbin.bar.global`的后端为172.18.0.5:30615,即`$INGRESS_HOST:$NODE_PORT`
    >
    >```json
-   >     "cluster": {
-   >      "load_assignment": {
-   >       "cluster_name": "outbound|8000||httpbin.bar.global",
-   >       "endpoints": [
-   >        {
-   >         "locality": {},
-   >         "lb_endpoints": [
-   >          {
-   >           "endpoint": {
-   >            "address": {
-   >             "socket_address": {
-   >              "address": "172.18.0.5",
-   >              "port_value": 30615
-   >             }
-   >            }
-   >           },
-   >           "load_balancing_weight": 1
-   >          }
-   >         ],
-   >         "load_balancing_weight": 1
+   >"cluster": {
+   > "load_assignment": {
+   >  "cluster_name": "outbound|8000||httpbin.bar.global",
+   >  "endpoints": [
+   >   {
+   >    "locality": {},
+   >    "lb_endpoints": [
+   >     {
+   >      "endpoint": {
+   >       "address": {
+   >        "socket_address": {
+   >         "address": "172.18.0.4",
+   >         "port_value": 30001
    >        }
-   >       ]
+   >       }
    >      },
+   >      "load_balancing_weight": 1
+   >     }
+   >    ],
+   >    "load_balancing_weight": 1
+   >   }
+   >  ]
+   > },
    >	  ...
-   >    },
+   >},
    >```
    >
-   >对应的路由如下，可以看到240.0.0.2只是作为了SNI匹配的一种，将匹配到的请求转发给上面的`"cluster": "outbound|8000||httpbin.bar.global"`进行处理：
+   >对应的路由如下，可以看到240.0.0.2只是作为了SNI的一种，将匹配到的请求转发给上面的`"cluster": "outbound|8000||httpbin.bar.global"`进行处理：
    >
    >```json
-   >     "route_config": {
-   >      "@type": "type.googleapis.com/envoy.config.route.v3.RouteConfiguration",
-   >      "name": "8000",
-   >      "virtual_hosts": [
-   >       ...
-   >       {
-   >        "name": "httpbin.bar.global:8000",
-   >        "domains": [
-   >         "httpbin.bar.global",
-   >         "httpbin.bar.global:8000",
-   >         "240.0.0.2",
-   >         "240.0.0.2:8000"
-   >        ],
-   >        "routes": [
-   >         {
-   >          "match": {
-   >           "prefix": "/"
-   >          },
-   >          "route": {
-   >           "cluster": "outbound|8000||httpbin.bar.global",
-   >           ...
+   >"route_config": {
+   > "@type": "type.googleapis.com/envoy.config.route.v3.RouteConfiguration",
+   > "name": "8000",
+   > "virtual_hosts": [
+   >  ...
+   >  {
+   >   "name": "httpbin.bar.global:8000",
+   >   "domains": [
+   >    "httpbin.bar.global",
+   >    "httpbin.bar.global:8000",
+   >    "240.0.0.2",
+   >    "240.0.0.2:8000"
+   >   ],
+   >   "routes": [
+   >    {
+   >     "match": {
+   >      "prefix": "/"
    >     },
+   >     "route": {
+   >      "cluster": "outbound|8000||httpbin.bar.global",
+   >      ...
+   >},
    >```
    >
-   >另外需要注意的是cluster1和cluster2都使用了一个Gateway和DestinationRule，对到`*.global`域的请求使用mTLS进行加密，并在网关上使用`AUTO_PASSTHROUGH`模式，此模式会根据SNI将请求直接转发给后端应用，无需virtualservice进行绑定。
+   >另外需要注意的是cluster1和cluster2都使用了一个Gateway和DestinationRule，对从sleep到httpbin的`*.global`域的请求使用mTLS进行加密，并在网关上使用`AUTO_PASSTHROUGH`模式，此模式会根据SNI将请求直接转发给后端应用，无需virtualservice进行绑定。
    >
    >```yaml
    >apiVersion: networking.istio.io/v1beta1
    >kind: Gateway
    >spec:
-   >  selector:
-   >    istio: ingressgateway
-   >  servers:
-   >  - hosts:
-   >    - '*.global'
-   >    port:
-   >      name: tls
-   >      number: 15443
-   >      protocol: TLS
-   >    tls:
-   >      mode: AUTO_PASSTHROUGH
+   >selector:
+   >istio: ingressgateway
+   >servers:
+   > - hosts:
+   >   - '*.global'
+   >   port:
+   >     name: tls
+   >     number: 15443
+   >     protocol: TLS
+   >   tls:
+   >     mode: AUTO_PASSTHROUGH
    >
    >apiVersion: networking.istio.io/v1beta1
    >kind: DestinationRule
    >spec:
-   >  host: '*.global'
-   >  trafficPolicy:
-   >    tls:
-   >      mode: ISTIO_MUTUAL
+   > host: '*.global'
+   > trafficPolicy:
+   >   tls:
+   >     mode: ISTIO_MUTUAL
    >```
+   >
+   >
 
 5. 校验可以通过sleep服务访问httpbin服务。
 
    ```shell
-   $ kubectl exec --context=$CTX_CLUSTER1 $SLEEP_POD -n foo -c sleep -- curl -I httpbin.bar.global:8000/headers
+   # kubectl exec --context=$CTX_CLUSTER1 $SLEEP_POD -n foo -c sleep -- curl -I httpbin.bar.global:8000/headers
+   
+   HTTP/1.1 200 OK
+   server: envoy
+   date: Wed, 14 Oct 2020 22:44:00 GMT
+   content-type: application/json
+   content-length: 554
+   access-control-allow-origin: *
+   access-control-allow-credentials: true
+   x-envoy-upstream-service-time: 8
    ```
    
-   > 在官方文档中使用如上命令即可在cluster1的sleep Pod中访问cluster2的httpbin服务。但从上面分析可以看到，当SNI为`httpbin.bar.global`的请求到达cluster2的ingress pod上时，它会按照k8s的coredns配置将该请求转发到istio的coredns进行解析，但cluster2并没有配置`httpbin.bar.global`对应的serviceentry，因此，istio的coredns也无法解析该dns，因此会返回503错误。在cluster2的istio-coredns-plugin容器的日志中可以找到如下信息：
+   > 在官方文档中使用如上命令即可在cluster1的sleep Pod中访问cluster2的httpbin服务。但从上面分析可以看到，当SNI为`httpbin.bar.global`的请求到达cluster2的ingress pod上时，它会按照k8s的coredns配置将该请求转发到istio的coredns进行解析，但cluster2并没有配置`httpbin.bar.global`对应的serviceentry，因此，istio的coredns也无法解析该dns，返回503错误。在cluster2的istio-coredns-plugin容器的日志中可以找到如下信息：
    >
    > ```verilog
    > ... info    Query A record: httpbin.bar.global.->{httpbin.bar.global. 1 1}
@@ -372,16 +381,16 @@ EOF
    > ... info    DNS query  ;; opcode: QUERY, status: NOERROR, id: 64168
    > ```
    >
-   > 在cluster2中创建如下serviceentry
+   > 在cluster2中创建如下serviceentry：
    >
    > ```yaml
    > $ kubectl apply --context=$CTX_CLUSTER2 -n bar -f - <<EOF
    > apiVersion: networking.istio.io/v1alpha3
    > kind: ServiceEntry
    > metadata:
-   >   name: httpbin-bar
+   > name: httpbin-bar
    > spec:
-   >   hosts:
+   > hosts:
    >   - httpbin.bar.global
    >   location: MESH_INTERNAL
    >   ports:
@@ -394,6 +403,40 @@ EOF
    >   endpoints:
    >   - address: httpbin.bar.svc.cluster.local #httpbin的k8s service
    > EOF
+   > ```
+   >
+   > httpbin生成的cluster如下，可以看到后端地址为`httpbin.bar.svc.cluster.local`，直接通过k8s的DNS即可解析该地址。
+   >
+   > ```json
+   >      "cluster": {
+   >       "@type": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
+   >       "name": "outbound|8000||httpbin.bar.global",
+   >       "type": "STRICT_DNS",
+   > 	  ...
+   >       "load_assignment": {
+   >        "cluster_name": "outbound|8000||httpbin.bar.global",
+   >        "endpoints": [
+   >         {
+   >          "locality": {},
+   >          "lb_endpoints": [
+   >           {
+   >            "endpoint": {
+   >             "address": {
+   >              "socket_address": {
+   >               "address": "httpbin.bar.svc.cluster.local",
+   >               "port_value": 8000
+   >              }
+   >             }
+   >            },
+   >            "load_balancing_weight": 1
+   >           }
+   >          ],
+   >          "load_balancing_weight": 1
+   >         }
+   >        ]
+   >       },
+   > 	  ...
+   >      },
    > ```
    >
    > 在cluster2中创建一个`sleep` pod，并在该pod中访问cluster2的`bar`命名空间下的`httpbin`服务，可以看到访问成功：
@@ -410,45 +453,115 @@ EOF
    > x-envoy-upstream-service-time: 206
    > ```
    >
-   > 此时从cluster1 仍然无法访问cluster2,跟踪issue https://github.com/istio/istio.io/issues/8285
+   > 在cluster2的ingress pod中导出与15443端口有关的listeners配置如下，可以看到[AUTO_PASSTHROUGH](https://istio.io/latest/docs/reference/config/networking/gateway/#ServerTLSSettings-TLSmode)模式下的listener并没有通过`route_config_name`指定到达cluster的路由(不需要通过virtualservice进行服务映射)，仅通过SNI进行请求转发。
+   >
+   > ```json
+   >    "dynamic_listeners": [
+   >     {
+   >      "name": "0.0.0.0_15443",
+   >      "active_state": {
+   >       "version_info": "2020-10-14T19:52:24Z/14",
+   >       "listener": {
+   >        "@type": "type.googleapis.com/envoy.config.listener.v3.Listener",
+   >        "name": "0.0.0.0_15443",
+   >        "address": {
+   >         "socket_address": {
+   >          "address": "0.0.0.0",
+   >          "port_value": 15443
+   >         }
+   >        },
+   >        "filter_chains": [
+   >         {
+   >          "filter_chain_match": {
+   >           "server_names": [
+   >            "*.global"
+   >           ]
+   >          },
+   >          "filters": [
+   >           ...
+   >           {
+   >            "name": "istio.stats",
+   >            ...
+   >           },
+   >           {
+   >            "name": "envoy.filters.network.tcp_proxy",
+   >            "typed_config": {
+   >             "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+   >             "stat_prefix": "BlackHoleCluster",
+   >             "cluster": "BlackHoleCluster"
+   >            }
+   >           }
+   >          ]
+   >         }
+   >        ],
+   >        "listener_filters": [
+   >         {
+   >          ...
+   >        ],
+   >        "traffic_direction": "OUTBOUND"
+   >       },
+   >       "last_updated": "2020-10-14T19:53:22.089Z"
+   >      }
+   >     }
+   >    ]
+   > ```
    
-   
 
+##### 卸载
 
+```shell
+$ kubectl delete --context=$CTX_CLUSTER1 -n foo -f samples/sleep/sleep.yaml
+$ kubectl delete --context=$CTX_CLUSTER1 -n foo serviceentry httpbin-bar
+$ kubectl delete --context=$CTX_CLUSTER1 ns foo
+```
 
-##### 通过egress网关向远端发送流量
+```shell
+$ kubectl delete --context=$CTX_CLUSTER2 -n bar -f samples/httpbin/httpbin.yaml
+$ kubectl delete --context=$CTX_CLUSTER2 ns bar
+```
 
+```shell
+$ unset SLEEP_POD CLUSTER2_GW_ADDR CLUSTER1_EGW_ADDR CTX_CLUSTER1 CTX_CLUSTER2
+```
 
+#### FAQ
 
+- cluster1和cluster2通信时，需要保证cluster1和cluster2的根证书是相同的。可以通过对比cluster1的sleep和cluster2的httpbin导出的istio sidecar的如下ROOTCA证书配置来判断是否一致。可能发生证书不一致的原因是
 
+  - 先创建istio，后创建`cacerts`根证书
+  - 重建istio时，没有删除之前错误的istio-system命名空间下的老的证书
+  - 重建istio后，没有清理foo或bar命名空间下的pod，secret资源。
 
+  因此在重建istio前，务必删除istio-system和foo/bar命名空间下的所有资源
 
+  ```json
+     "dynamic_active_secrets": [
+      {
+       "name": "default",
+       "secret": {
+        "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret",
+        "name": "default",
+        ...
+       }
+      },
+      {
+       "name": "ROOTCA",
+       "secret": {
+        "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.Secret",
+        "name": "ROOTCA",
+        "validation_context": {
+         "trusted_ca": {
+          "inline_bytes": "LS0tLxxx="
+         }
+        }
+       }
+      }
+     ]
+  ```
 
-
-
-
-
-参考：
+  参考：
 
 - [Using CoreDNS to Conceal Network Identities of Services in Istio](https://thecloudblog.net/post/using-coredns-to-conceal-network-identities-of-services-in-istio/)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
