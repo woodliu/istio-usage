@@ -18,6 +18,23 @@
 
 ### 插入现有证书和密钥
 
+> 在istio的samples/certs目录下有一套证书，可以比较好地解释istio的证书交互原理。
+>
+> - `root-cert.pem`: root CA certificate.
+> - `ca-[cert|key].pem`: Citadel intermediate certificate and corresponding private key.
+> - `cert-chain.pem`: certificate trust chain.
+> - `workload-foo-[cert|key].pem`: workload certificate and key for URI SAN `spiffe://trust-domain-foo/ns/foo/sa/foo` signed by `ca-cert.key`.
+> - `workload-bar-[cert|key].pem`: workload certificate and key for URI SAN `spiffe://trust-domain-bar/ns/bar/sa/bar` signed by `ca-cert.key`.
+>
+> 假如希望使用现有的CA证书`ca-cert.pem`和`ca-key.pem`(`root-cert.pem`签发了`ca-cert.pem`，因此`root-cert.pem`作为所有负载的根证书)。由于`ca-cert.pem`不同于`root-cert.pem`，因此无法直接通过根证书进行校验，此时需要通过一个`cert-chain.pem`来指定信任链，包含负载到根CA的所有中间CAs。在上述例子中，仅包含了istio的CA签名证书，因此`cert-chain.pem` 与`ca-cert.pem`相同。注意：如果 `ca-cert.pem`与 `root-cert.pem`是相同的，那么 `cert-chain.pem`文件应该是空的。
+>
+> 上述证书例子中的证书链为：`root-cert.pem`-->`cert-chain.pem`(含`ca-cert.pem`)-->`workload-foo-cert.pem`/`workload-bar-cert.pem`，可以使用如下方式进行校验：
+>
+> ```shell
+> # openssl verify -CAfile <(cat ca-cert.pem root-cert.pem) workload-bar-cert.pem
+> workload-bar-cert.pem: OK
+> ```
+>
 > 对于生产环境，最好在一台离线机器上执行如下步骤，确保将根密钥暴露给尽可能少的人
 
 1. 创建一个保存证书和密钥的目录
@@ -246,3 +263,4 @@ X509v3 Subject Alternative Name:
 ```shell
 $ kubectl delete ns istio-system
 ```
+
