@@ -347,6 +347,13 @@ spec:
 > - 对于HTTP流量， HTTP Host/Authority 首部字段将会与hosts 字段进行匹配
 > - 对于包含Server Name Indication (SNI)的HTTPS或TLS流量将会与hosts 字段进行匹配
 
+[resolution](https://istio.io/latest/docs/reference/config/networking/service-entry/#ServiceEntry-Resolution)字段表示代理如何解析IP地址，有三种模式：
+
+| `NONE`   | 假设传入的连接已经被解析(到一个特定的目的地IP地址)。通常使用诸如IPtable的REDIRECT / eBPF之类的机制通过代理路由此类连接。 |
+| -------- | :----------------------------------------------------------- |
+| `STATIC` | 使用静态IP给出与服务关联的`endpoints`                        |
+| `DNS`    | 使用DNS解析主机IP地址，通常根据本地DNS服务器(如k8s的DNS)来解析`hosts`和`endpoints`中的域名 |
+
 可以使用virtual service和destination rule来控制到达一个service entry的流量。例如，下面destination rule配置了流量路由使用mutual TLS来加密到达外部服务`ext-svc.example.com`间的连接。
 
 ```yaml
